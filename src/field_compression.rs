@@ -36,13 +36,12 @@ const fn compress_15_states(row: &[State; 15]) -> (u8, u8, u8, u8) {
 }
 
 #[inline]
-fn decompress_15_states((b0, b1, b2, b3): (u8, u8, u8, u8)) -> [State; 15] {
-    let mut result = [E; 15];
-    result[0..4].copy_from_slice(&decompress_four_states(&b0)[..]);
-    result[4..8].copy_from_slice(&decompress_four_states(&b1)[..]);
-    result[8..12].copy_from_slice(&decompress_four_states(&b2)[..]);
-    result[12..15].copy_from_slice(&decompress_four_states(&b3)[..3]);
-    result
+const fn decompress_15_states((b0, b1, b2, b3): (u8, u8, u8, u8)) -> [State; 15] {
+    let ( p0,  p1,  p2,  p3) = decompress_four_states(b0);
+    let ( p4,  p5,  p6,  p7) = decompress_four_states(b1);
+    let ( p8,  p9, p10, p11) = decompress_four_states(b2);
+    let (p12, p13, p14, _) = decompress_four_states(b3);
+    [p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14]
 }
 
 #[inline]
@@ -55,13 +54,13 @@ const fn compress_four_states(s1: &State, s2: &State, s3: &State, s4: &State) ->
 }
 
 #[inline(always)]
-fn decompress_four_states(b: &u8) -> [State; 4] {
-    [
+const fn decompress_four_states(b: u8) -> (State, State, State, State) {
+    (
         decode_with_flag(b, 0),
         decode_with_flag(b, 2),
         decode_with_flag(b, 4),
         decode_with_flag(b, 6),
-    ]
+    )
 }
 
 #[inline(always)]
@@ -75,7 +74,7 @@ const fn state_to_byte(state: &State) -> u8 {
 
 // this function makes assumption about data integrity
 #[inline(always)]
-fn decode_with_flag(byte: &u8, shift_bit: u8) -> State {
+const fn decode_with_flag(byte: u8, shift_bit: u8) -> State {
     let is_empty = ((EMPTY_BIT_FLAG << shift_bit) & byte) != 0u8;
     let is_black = ((BLACK_BIT_FLAG << shift_bit) & byte) != 0u8;
     match (is_empty, is_black) {
