@@ -37,11 +37,13 @@ const fn compress_15_states(row: &[State; 15]) -> (u8, u8, u8, u8) {
 
 #[inline]
 const fn decompress_15_states((b0, b1, b2, b3): (u8, u8, u8, u8)) -> [State; 15] {
-    let ( p0,  p1,  p2,  p3) = decompress_four_states(b0);
-    let ( p4,  p5,  p6,  p7) = decompress_four_states(b1);
-    let ( p8,  p9, p10, p11) = decompress_four_states(b2);
+    let (p0, p1, p2, p3) = decompress_four_states(b0);
+    let (p4, p5, p6, p7) = decompress_four_states(b1);
+    let (p8, p9, p10, p11) = decompress_four_states(b2);
     let (p12, p13, p14, _) = decompress_four_states(b3);
-    [p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14]
+    [
+        p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14,
+    ]
 }
 
 #[inline]
@@ -86,8 +88,8 @@ const fn decode_with_flag(byte: u8, shift_bit: u8) -> State {
 
 #[cfg(test)]
 mod compress {
-    use crate::field_utility::rotate;
     use super::*;
+    use crate::field_utility::rotate;
 
     const FIELD: [[State; 15]; 15] = [
         [E, B, E, E, E, E, W, E, E, E, E, E, E, E, E],

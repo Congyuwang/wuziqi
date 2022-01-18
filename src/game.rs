@@ -25,7 +25,7 @@ pub async fn new_game(
     mut commands: Receiver<GameCommand>,
     mut response: Sender<GameResponse>,
 ) {
-    let mut history = VecDeque::new();
+    let mut history = VecDeque::with_capacity(225);
     let mut field = Field::new();
     while let Some(command) = commands.next().await {
         if let Err(e) =
