@@ -1,4 +1,4 @@
-use crate::field::State::{self, B, E, W};
+use crate::game::field::State::{self, B, E, W};
 use anyhow::Result;
 use unroll::unroll_for_loops;
 

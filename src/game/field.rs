@@ -1,7 +1,15 @@
-use crate::field::FieldState::{BlackWins, Draw, Impossible, UnFinished, WhiteWins};
-use crate::field::State::{B, E, W};
-use crate::field_utility::{diagonal_b_w_max, reduce_tuple_max, rotate, rows_b_w_max};
+use crate::game::field::FieldState::{BlackWins, Draw, Impossible, UnFinished, WhiteWins};
+use crate::game::field::State::{B, E, W};
+use crate::game::field_utility::{diagonal_b_w_max, reduce_tuple_max, rotate, rows_b_w_max};
 use anyhow::{Error, Result};
+use crate::game::field_compression::compress_field;
+
+#[derive(Clone, PartialEq, Copy, Debug)]
+#[repr(u8)]
+pub enum Color {
+    Black = 1,
+    White = 2,
+}
 
 // ban 0 for protocol message EOF
 #[derive(Clone, PartialEq, Copy, Debug)]
@@ -13,6 +21,16 @@ pub enum State {
     W = 2,
     // empty
     E = 3,
+}
+
+impl From<Color> for State {
+    #[inline(always)]
+    fn from(c: Color) -> Self {
+        match c {
+            Color::Black => B,
+            Color::White => W,
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -42,21 +60,40 @@ impl Field {
         }
     }
 
-    /// put a piece on the field, or clear a piece using State::E.
-    pub fn play(&mut self, x: usize, y: usize, state: State) -> Result<()> {
+    /// play black and white
+    pub fn play(&mut self, x: usize, y: usize, color: Color) -> Result<()> {
         match self.inner.get_mut(x) {
-            None => Err(Error::msg("field range exceeded")),
+            None => unlikely_error(Err(Error::msg("field range exceeded"))),
             Some(row) => match row.get_mut(y) {
-                None => Err(Error::msg("field range exceeded")),
+                None => unlikely_error(Err(Error::msg("field range exceeded"))),
                 Some(s) => {
-                    if let E = s {
+                    if *s != E {
+                        unlikely_error(Err(Error::msg("already occupied")))
+                    } else {
                         self.e_count -= 1;
+                        *s = color.into();
+                        Ok(self.update_field_state())
                     }
-                    if let E = state {
+                }
+            },
+        }
+    }
+
+    /// clear a piece using State::E.
+    pub fn clear(&mut self, x: usize, y: usize) -> Result<()> {
+        match self.inner.get_mut(x) {
+            None => unlikely_error(Err(Error::msg("field range exceeded"))),
+            Some(row) => match row.get_mut(y) {
+                None => unlikely_error(Err(Error::msg("field range exceeded"))),
+                Some(s) => {
+                    if *s != E {
                         self.e_count += 1;
+                        *s = E;
+                        self.update_field_state();
+                        Ok(())
+                    } else {
+                        unlikely_error(Err(Error::msg("already empty")))
                     }
-                    *s = state;
-                    Ok(self.update_field_state())
                 }
             },
         }
@@ -93,30 +130,26 @@ impl Field {
     }
 }
 
+#[cold]
+fn unlikely_error<T>(e: T) -> T { e }
+
 #[cfg(test)]
 mod test_field {
+    use super::Color::{Black, White};
     use super::*;
-    #[test]
-    fn test_empty_field() {
-        let mut field = Field::new();
-        field.play(7, 8, B).unwrap();
-        // and play some
-        // check state
-        assert_eq!(*field.get_field_state(), UnFinished);
-    }
 
     #[test]
     fn test_field_1() {
         // 测试各种棋盘状态
         let mut f = Field::new();
-        f.play(0, 0, B).unwrap();
-        f.play(14, 14, W).unwrap();
-        f.play(1, 1, B).unwrap();
-        f.play(13, 13, W).unwrap();
-        f.play(10, 10, B).unwrap();
-        f.play(5, 5, W).unwrap();
-        f.play(10, 5, B).unwrap();
-        f.play(5, 10, W).unwrap();
+        f.play(0, 0, Black).unwrap();
+        f.play(14, 14, White).unwrap();
+        f.play(1, 1, Black).unwrap();
+        f.play(13, 13, White).unwrap();
+        f.play(10, 10, Black).unwrap();
+        f.play(5, 5, White).unwrap();
+        f.play(10, 5, Black).unwrap();
+        f.play(5, 10, White).unwrap();
         assert_eq!(
             f.get_field(),
             &[
@@ -144,7 +177,7 @@ mod test_field {
         // test play method for BlackWins
         let mut f = Field::new();
         for i in 0..5 {
-            f.play(i, i, B).unwrap();
+            f.play(i, i, Black).unwrap();
         }
         assert_eq!(f.get_field_state(), &BlackWins);
     }
@@ -154,7 +187,7 @@ mod test_field {
         // test play method for WhiteWins
         let mut f = Field::new();
         for i in 0..5 {
-            f.play(i, i, W).unwrap();
+            f.play(i, i, White).unwrap();
         }
         assert_eq!(f.get_field_state(), &WhiteWins);
     }
@@ -163,10 +196,10 @@ mod test_field {
     fn test_play_unfinished() {
         let mut f = Field::new();
         for i in 0..4 {
-            f.play(i, i, W).unwrap();
+            f.play(i, i, White).unwrap();
         }
         for i in (5..9).rev() {
-            f.play(i, i, B).unwrap();
+            f.play(i, i, Black).unwrap();
         }
         assert_eq!(f.get_field_state(), &UnFinished);
     }
@@ -180,16 +213,19 @@ mod test_field {
                 let col_color_switcher = ((j / 3) + i) % 2 == 0;
                 if row_order_switcher {
                     if col_color_switcher {
-                        f.play(i, j, W);
+                        f.play(i, j, White).unwrap();
                     } else {
-                        f.play(i, j, B);
+                        f.play(i, j, Black).unwrap();
                     }
                 } else {
                     if col_color_switcher {
-                        f.play(i, j, B);
+                        f.play(i, j, Black).unwrap();
                     } else {
-                        f.play(i, j, W);
+                        f.play(i, j, White).unwrap();
                     }
+                }
+                if i != 14 || j != 14 {
+                    assert_eq!(f.get_field_state(), &UnFinished);
                 }
             }
         }
@@ -200,7 +236,7 @@ mod test_field {
     fn test_play_impossible() {
         let mut f = Field::new();
         for i in 0..6 {
-            f.play(i, i, B).unwrap();
+            f.play(i, i, Black).unwrap();
         }
         assert_eq!(f.get_field_state(), &Impossible);
     }
@@ -208,7 +244,7 @@ mod test_field {
     #[test]
     fn test_play_out_of_range() {
         let mut f = Field::new();
-        if let Ok(_) = f.play(17, 21, B) {
+        if let Ok(_) = f.play(17, 21, Black) {
             panic!("error not thrown")
         }
     }

@@ -1,4 +1,4 @@
-use crate::field::State::{self, B, E, W};
+use crate::game::field::State::{self, B, E, W};
 use unroll::unroll_for_loops;
 
 const EMPTY_BIT_FLAG: u8 = 0b0000_00010;
@@ -89,7 +89,7 @@ const fn decode_with_flag(byte: u8, shift_bit: u8) -> State {
 #[cfg(test)]
 mod compress {
     use super::*;
-    use crate::field_utility::rotate;
+    use crate::game::field_utility::rotate;
 
     const FIELD: [[State; 15]; 15] = [
         [E, B, E, E, E, E, W, E, E, E, E, E, E, E, E],

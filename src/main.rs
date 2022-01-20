@@ -1,9 +1,7 @@
-mod field;
-mod field_compression;
-mod field_utility;
-mod game;
+pub mod game;
 mod player;
 mod room;
+mod session;
 
 use anyhow::{Error, Result};
 use async_std::io::BufReader;
