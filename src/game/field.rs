@@ -1,14 +1,23 @@
 use crate::game::field::FieldState::{BlackWins, Draw, Impossible, UnFinished, WhiteWins};
 use crate::game::field::State::{B, E, W};
+use crate::game::field_compression::compress_field;
 use crate::game::field_utility::{diagonal_b_w_max, reduce_tuple_max, rotate, rows_b_w_max};
 use anyhow::{Error, Result};
-use crate::game::field_compression::compress_field;
 
 #[derive(Clone, PartialEq, Copy, Debug)]
 #[repr(u8)]
 pub enum Color {
     Black = 1,
     White = 2,
+}
+
+impl Color {
+    pub fn switch(&self) -> Self {
+        match self {
+            Color::Black => Color::White,
+            Color::White => Color::Black,
+        }
+    }
 }
 
 // ban 0 for protocol message EOF
@@ -35,7 +44,7 @@ impl From<Color> for State {
 
 #[derive(Clone, PartialEq, Debug)]
 #[repr(u8)]
-pub enum FieldState {
+pub(crate) enum FieldState {
     BlackWins,
     WhiteWins,
     UnFinished,
@@ -44,7 +53,7 @@ pub enum FieldState {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct Field {
+pub(crate) struct Field {
     inner: [[State; 15]; 15],
     field_state: FieldState,
     e_count: u8,
@@ -131,7 +140,9 @@ impl Field {
 }
 
 #[cold]
-fn unlikely_error<T>(e: T) -> T { e }
+fn unlikely_error<T>(e: T) -> T {
+    e
+}
 
 #[cfg(test)]
 mod test_field {

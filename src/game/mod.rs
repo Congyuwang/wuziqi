@@ -1,4 +1,8 @@
-pub mod game;
+mod field;
+mod field_compression;
 mod field_utility;
-pub mod field_compression;
-pub mod field;
+mod game;
+
+pub use field::{Color, State};
+pub use field_compression::{compress_field, decompress_field};
+pub(crate) use game::{new_game, GameCommand, GameResponse};

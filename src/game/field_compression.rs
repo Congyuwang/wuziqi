@@ -17,7 +17,7 @@ pub const fn compress_field(field: &[[State; 15]; 15]) -> [(u8, u8, u8, u8); 15]
 
 #[inline]
 #[unroll_for_loops]
-pub fn decompress_field(dat: &[(u8, u8, u8, u8); 15]) -> [[State; 15]; 15] {
+pub const fn decompress_field(dat: &[(u8, u8, u8, u8); 15]) -> [[State; 15]; 15] {
     let mut result = [[E; 15]; 15];
     for n in 0..15 {
         result[n] = decompress_15_states(dat[n])
