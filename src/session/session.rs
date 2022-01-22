@@ -19,6 +19,8 @@ pub async fn new_session(
     black_player: (Sender<PlayerResponse>, Receiver<PlayerAction>, u64),
     white_player: (Sender<PlayerResponse>, Receiver<PlayerAction>, u64),
 ) {
+    // TODO: use wrapping_add for game_id
+    info!("game session {} launched with black player {} and white player {}", game_id, black_player.2, white_player.2);
     // start game thread
     let (cmd_s, rsp_r) = start_game(game_id);
     // start message receiver
@@ -76,8 +78,8 @@ async fn handle_game_message(
     responses: &Sender<SessionResponse>,
 ) -> Result<()> {
     match game_message {
-        GameResponse::Field(color, field) => {
-            broadcast_to_players(PlayerResponse::FieldUpdate(color, field), responses).await
+        GameResponse::Field(state) => {
+            broadcast_to_players(PlayerResponse::FieldUpdate(state), responses).await
         }
         GameResponse::Undo(field) => {
             broadcast_to_players(PlayerResponse::Undo(UndoResponse::Undo(field)), responses).await

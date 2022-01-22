@@ -1,4 +1,4 @@
-use crate::game::field::FieldState::{BlackWins, Draw, Impossible, UnFinished, WhiteWins};
+use crate::game::field::GameState::{BlackWins, Draw, Impossible, UnFinished, WhiteWins};
 use crate::game::field::State::{B, E, W};
 use crate::game::field_compression::compress_field;
 use crate::game::field_utility::{diagonal_b_w_max, reduce_tuple_max, rotate, rows_b_w_max};
@@ -44,7 +44,7 @@ impl From<Color> for State {
 
 #[derive(Clone, PartialEq, Debug)]
 #[repr(u8)]
-pub(crate) enum FieldState {
+pub(crate) enum GameState {
     BlackWins,
     WhiteWins,
     UnFinished,
@@ -55,7 +55,7 @@ pub(crate) enum FieldState {
 #[derive(Debug, PartialEq)]
 pub(crate) struct Field {
     inner: [[State; 15]; 15],
-    field_state: FieldState,
+    field_state: GameState,
     e_count: u8,
 }
 
@@ -116,7 +116,7 @@ impl Field {
     /// read the field state
     ///
     /// this method is inert, it reads from cached field state
-    pub fn get_field_state(&self) -> &FieldState {
+    pub fn get_field_state(&self) -> &GameState {
         &self.field_state
     }
 

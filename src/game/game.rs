@@ -1,9 +1,10 @@
-use crate::game::field::{Color, Field, FieldState, State};
+use crate::game::field::{Color, Field, GameState, State};
 use anyhow::{Error, Result};
 use async_std::channel::{Receiver, SendError, Sender};
 use futures::StreamExt;
 use log::{error, info};
 use std::collections::VecDeque;
+use crate::session::FieldState;
 
 #[derive(Debug)]
 pub(crate) enum GameCommand {
@@ -15,11 +16,11 @@ pub(crate) enum GameCommand {
 #[derive(Debug)]
 pub(crate) enum GameResponse {
     /// color in field indicates the color of the latest step
-    Field(Color, [[State; 15]; 15]),
+    Field(FieldState),
     BlackWins,
     WhiteWins,
     Draw,
-    Undo([[State; 15]; 15]),
+    Undo(FieldState),
     NoMoreUndo,
     GameError(String),
 }
@@ -75,7 +76,7 @@ async fn do_play(
         send_unlikely_error(e, game_id, response).await
     } else {
         history.push_back((x, y, color));
-        send_game_state(color, field, response).await
+        send_game_state(x, y, field, response).await
     }
 }
 
@@ -90,7 +91,8 @@ async fn undo_play(
         if let Err(e) = field.clear(x as usize, y as usize) {
             send_unlikely_error(e, game_id, response).await
         } else {
-            send_undo_state(field, response).await
+            let prev_step = history.back().map(|&(x, y, _)| (x, y));
+            send_undo_state(prev_step, field, response).await
         }
     } else {
         Ok(response.send(GameResponse::NoMoreUndo).await?)
@@ -99,33 +101,34 @@ async fn undo_play(
 
 #[inline(always)]
 async fn send_game_state(
-    color: Color,
+    x: u8,
+    y: u8,
     field: &Field,
     response: &Sender<GameResponse>,
 ) -> Result<()> {
     // send field update
     response
-        .send(GameResponse::Field(color, field.get_field().clone()))
+        .send(GameResponse::Field(FieldState { latest: Some((x, y)), field: field.get_field().clone() } ))
         .await?;
     // send field state
     match field.get_field_state() {
-        FieldState::BlackWins => response.send(GameResponse::BlackWins).await?,
-        FieldState::WhiteWins => response.send(GameResponse::WhiteWins).await?,
-        FieldState::Draw => response.send(GameResponse::Draw).await?,
-        FieldState::Impossible => {
+        GameState::BlackWins => response.send(GameResponse::BlackWins).await?,
+        GameState::WhiteWins => response.send(GameResponse::WhiteWins).await?,
+        GameState::Draw => response.send(GameResponse::Draw).await?,
+        GameState::Impossible => {
             response
                 .send(GameResponse::GameError("impossible_game_state".to_string()))
                 .await?
         }
-        FieldState::UnFinished => {}
+        GameState::UnFinished => {}
     }
     Ok(())
 }
 
 #[inline(always)]
-async fn send_undo_state(field: &Field, response: &Sender<GameResponse>) -> Result<()> {
+async fn send_undo_state(prev_step: Option<(u8, u8)>, field: &Field, response: &Sender<GameResponse>) -> Result<()> {
     Ok(response
-        .send(GameResponse::Undo(field.get_field().clone()))
+        .send(GameResponse::Undo(FieldState { latest: prev_step, field: field.get_field().clone() }))
         .await?)
 }
 
@@ -150,7 +153,7 @@ mod test_game {
     use async_std::task;
     use async_std::task::spawn;
     use futures::executor::block_on;
-    use futures::future::{join, join3};
+    use futures::future::join3;
 
     #[test]
     fn test_do() {
@@ -183,7 +186,7 @@ mod test_game {
         let receiver = async {
             while let Some(resp) = response.next().await {
                 match resp {
-                    GameResponse::Field(_, f) => {
+                    GameResponse::Field(f) => {
                         println!("do");
                         println!("{:?}", f);
                     }

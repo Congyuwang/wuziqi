@@ -5,7 +5,7 @@ use anyhow::Result;
 use async_std::channel::{bounded, Receiver, Sender};
 use async_std::task;
 use futures::{select, FutureExt, StreamExt, TryFutureExt};
-use std::fmt::Formatter;
+use std::fmt::{Formatter, Write};
 
 pub(crate) const CHANNEL_SIZE: usize = 20;
 
@@ -21,11 +21,19 @@ pub enum PlayerAction {
 /// response to players
 #[derive(Clone)]
 pub enum PlayerResponse {
-    FieldUpdate(Color, [[State; 15]; 15]),
+    FieldUpdate(FieldState),
     UndoRequest,
     Undo(UndoResponse),
     /// other player quit or game error
     Quit(QuitResponse),
+}
+
+/// this struct represents a game field
+/// and also the coordinate of the latest position
+#[derive(Clone)]
+pub struct FieldState {
+    pub latest: Option<(u8, u8)>,
+    pub field: [[State; 15]; 15]
 }
 
 /// player actions
@@ -46,7 +54,7 @@ pub enum QuitReason {
 /// response to players
 #[derive(Clone)]
 pub enum UndoResponse {
-    Undo([[State; 15]; 15]),
+    Undo(FieldState),
     RejectedByOpponent,
     AutoRejected,
     TimeOutRejected,
@@ -179,5 +187,49 @@ impl std::fmt::Display for GameFinished {
             GameFinished::WhiteWins => f.write_str("WhiteWins"),
             GameFinished::Draw => f.write_str("Draw"),
         }
+    }
+}
+
+impl std::fmt::Debug for FieldState {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let coord = self.latest;
+        match coord {
+            None => {
+                for row in self.field {
+                    for s in row {
+                        match s {
+                            State::B => f.write_char('x')?,
+                            State::W => f.write_char('o')?,
+                            State::E => f.write_char('.')?,
+                        }
+                        f.write_char(' ')?
+                    }
+                    f.write_char('\n')?
+                }
+            }
+            Some((x, y)) => {
+                for (i, row) in self.field.into_iter().enumerate() {
+                    for (j, s) in row.into_iter().enumerate() {
+                        if i == x as usize && j == y as usize {
+                            match s {
+                                State::B => f.write_char('X')?,
+                                State::W => f.write_char('O')?,
+                                State::E => panic!("latest position could not be empty"),
+                            }
+                        } else {
+                            match s {
+                                State::B => f.write_char('x')?,
+                                State::W => f.write_char('o')?,
+                                State::E => f.write_char('.')?,
+                            }
+                        }
+                        f.write_char(' ')?;
+                        f.write_char(' ')?;
+                    }
+                    f.write_char('\n')?;
+                }
+            }
+        }
+        Ok(())
     }
 }
