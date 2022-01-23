@@ -1,35 +1,18 @@
-use crate::game::field::GameState::{BlackWins, Draw, Impossible, UnFinished, WhiteWins};
-use crate::game::field::State::{B, E, W};
-use crate::game::field_compression::compress_field;
-use crate::game::field_utility::{diagonal_b_w_max, reduce_tuple_max, rotate, rows_b_w_max};
+use crate::game::game_field::field::GameState::{
+    BlackWins, Draw, Impossible, UnFinished, WhiteWins,
+};
+use crate::game::game_field::utility::{diagonal_b_w_max, reduce_tuple_max, rotate, rows_b_w_max};
+use crate::game::game_field::State::{B, E, W};
+use crate::game::game_field::{Color, State};
 use anyhow::{Error, Result};
 
-#[derive(Clone, PartialEq, Copy, Debug)]
-#[repr(u8)]
-pub enum Color {
-    Black = 1,
-    White = 2,
-}
-
 impl Color {
-    pub fn switch(&self) -> Self {
+    pub(crate) fn switch(&self) -> Self {
         match self {
             Color::Black => Color::White,
             Color::White => Color::Black,
         }
     }
-}
-
-// ban 0 for protocol message EOF
-#[derive(Clone, PartialEq, Copy, Debug)]
-#[repr(u8)]
-pub enum State {
-    // black
-    B = 1,
-    // white
-    W = 2,
-    // empty
-    E = 3,
 }
 
 impl From<Color> for State {
@@ -81,7 +64,8 @@ impl Field {
                     } else {
                         self.e_count -= 1;
                         *s = color.into();
-                        Ok(self.update_field_state())
+                        self.update_field_state();
+                        Ok(())
                     }
                 }
             },
@@ -228,12 +212,10 @@ mod test_field {
                     } else {
                         f.play(i, j, Black).unwrap();
                     }
+                } else if col_color_switcher {
+                    f.play(i, j, Black).unwrap();
                 } else {
-                    if col_color_switcher {
-                        f.play(i, j, Black).unwrap();
-                    } else {
-                        f.play(i, j, White).unwrap();
-                    }
+                    f.play(i, j, White).unwrap();
                 }
                 if i != 14 || j != 14 {
                     assert_eq!(f.get_field_state(), &UnFinished);
@@ -255,7 +237,7 @@ mod test_field {
     #[test]
     fn test_play_out_of_range() {
         let mut f = Field::new();
-        if let Ok(_) = f.play(17, 21, Black) {
+        if f.play(17, 21, Black).is_ok() {
             panic!("error not thrown")
         }
     }

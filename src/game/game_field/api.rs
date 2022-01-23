@@ -1,10 +1,13 @@
-use crate::game::field::{Color, Field, GameState, State};
+use crate::game::game_field::field::{Field, GameState};
+use crate::game::game_field::Color;
+use crate::game::session::{FieldState, FieldStateNullable};
+use crate::CHANNEL_SIZE;
 use anyhow::{Error, Result};
-use async_std::channel::{Receiver, SendError, Sender};
+use async_std::channel::{bounded, Receiver, Sender};
+use async_std::task;
 use futures::StreamExt;
-use log::{error, info};
+use log::{error, trace};
 use std::collections::VecDeque;
-use crate::session::FieldState;
 
 #[derive(Debug)]
 pub(crate) enum GameCommand {
@@ -20,30 +23,40 @@ pub(crate) enum GameResponse {
     BlackWins,
     WhiteWins,
     Draw,
-    Undo(FieldState),
-    NoMoreUndo,
+    Undo(FieldStateNullable),
     GameError(String),
 }
 
-/// Start a new game.
+/// Start a new field.
 ///
 /// This actor stops when it is gets a `Kill` signal or when its response receiver
 /// gets dropped.
-pub(crate) async fn new_game(
-    game_id: u64,
-    mut commands: Receiver<GameCommand>,
-    mut response: Sender<GameResponse>,
-) {
+pub(crate) fn new_field(session_id: u64) -> (Sender<GameCommand>, Receiver<GameResponse>) {
+    let (cmd_s, mut commands) = bounded(CHANNEL_SIZE);
+    let (response, rsp_r) = bounded(CHANNEL_SIZE);
     let mut history = VecDeque::with_capacity(225);
     let mut field = Field::new();
-    while let Some(command) = commands.next().await {
-        if execute_command(game_id, &mut field, command, &response, &mut history)
-            .await
-            .is_err()
-        {
-            break;
+    task::spawn(async move {
+        while let Some(command) = commands.next().await {
+            #[cfg(debug_assertions)]
+            trace!(
+                "field of game {} received command {:?}",
+                session_id,
+                command
+            );
+            if execute_command(session_id, &mut field, command, &response, &mut history)
+                .await
+                .is_err()
+            {
+                #[cfg(debug_assertions)]
+                trace!("field thread of game {} stopped on err", session_id);
+                break;
+            }
         }
-    }
+        #[cfg(debug_assertions)]
+        trace!("field thread of game {} stopped", session_id);
+    });
+    (cmd_s, rsp_r)
 }
 
 /// the error of this function means game killed or receivers dropped, just exit
@@ -76,7 +89,7 @@ async fn do_play(
         send_unlikely_error(e, game_id, response).await
     } else {
         history.push_back((x, y, color));
-        send_game_state(x, y, field, response).await
+        send_game_state(x, y, color, field, response).await
     }
 }
 
@@ -91,11 +104,11 @@ async fn undo_play(
         if let Err(e) = field.clear(x as usize, y as usize) {
             send_unlikely_error(e, game_id, response).await
         } else {
-            let prev_step = history.back().map(|&(x, y, _)| (x, y));
-            send_undo_state(prev_step, field, response).await
+            let prev = history.back().map(|&(x, y, c)| (x, y, c));
+            send_undo_state(prev, field, response).await
         }
     } else {
-        Ok(response.send(GameResponse::NoMoreUndo).await?)
+        Ok(())
     }
 }
 
@@ -103,12 +116,16 @@ async fn undo_play(
 async fn send_game_state(
     x: u8,
     y: u8,
+    color: Color,
     field: &Field,
     response: &Sender<GameResponse>,
 ) -> Result<()> {
     // send field update
     response
-        .send(GameResponse::Field(FieldState { latest: Some((x, y)), field: field.get_field().clone() } ))
+        .send(GameResponse::Field(FieldState {
+            latest: (x, y, color),
+            field: *field.get_field(),
+        }))
         .await?;
     // send field state
     match field.get_field_state() {
@@ -126,9 +143,16 @@ async fn send_game_state(
 }
 
 #[inline(always)]
-async fn send_undo_state(prev_step: Option<(u8, u8)>, field: &Field, response: &Sender<GameResponse>) -> Result<()> {
+async fn send_undo_state(
+    prev: Option<(u8, u8, Color)>,
+    field: &Field,
+    response: &Sender<GameResponse>,
+) -> Result<()> {
     Ok(response
-        .send(GameResponse::Undo(FieldState { latest: prev_step, field: field.get_field().clone() }))
+        .send(GameResponse::Undo(FieldStateNullable {
+            latest: prev,
+            field: *field.get_field(),
+        }))
         .await?)
 }
 
@@ -143,61 +167,4 @@ async fn send_unlikely_error(
     Ok(response
         .send(GameResponse::GameError(e.to_string()))
         .await?)
-}
-
-#[cfg(test)]
-mod test_game {
-    use super::*;
-    use crate::game::field::Color::{Black, White};
-    use async_std::channel::bounded;
-    use async_std::task;
-    use async_std::task::spawn;
-    use futures::executor::block_on;
-    use futures::future::join3;
-
-    #[test]
-    fn test_do() {
-        let (commands, c) = bounded(20);
-        let (r, mut response) = bounded(20);
-        let game = new_game(0, c, r);
-        let sender = async move {
-            let test_commands = [
-                (5, 5, Black),
-                (5, 6, White),
-                (6, 6, Black),
-                (5, 7, White),
-                (4, 4, Black),
-                (5, 8, White),
-                (7, 7, Black),
-                (5, 9, White),
-                (8, 8, Black),
-            ];
-            for (x, y, color) in test_commands {
-                commands
-                    .send(GameCommand::Do { x, y, color })
-                    .await
-                    .unwrap();
-            }
-            for _ in 0..3 {
-                commands.send(GameCommand::Undo).await.unwrap();
-            }
-            commands.send(GameCommand::Kill).await.unwrap();
-        };
-        let receiver = async {
-            while let Some(resp) = response.next().await {
-                match resp {
-                    GameResponse::Field(f) => {
-                        println!("do");
-                        println!("{:?}", f);
-                    }
-                    GameResponse::Undo(f) => {
-                        println!("undo");
-                        println!("{:?}", f);
-                    }
-                    _ => println!("{:?}", resp),
-                }
-            }
-        };
-        block_on(async { join3(receiver, game, sender).await });
-    }
 }

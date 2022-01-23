@@ -1,5 +1,4 @@
-use crate::game::field::State::{self, B, E, W};
-use anyhow::Result;
+use crate::game::game_field::State::{self, B, E, W};
 use unroll::unroll_for_loops;
 
 /// rotate a field

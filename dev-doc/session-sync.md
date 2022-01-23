@@ -58,6 +58,7 @@ sequenceDiagram
     Note over w: ban Undo
     b ->> g: request Undo
     Note over b: RequestingUndo
+    Note over b: ban Undo
     g -->> w: request Undo
     Note over w: ApprovingUndo
     Note over w: Start Request Timer
@@ -66,7 +67,6 @@ sequenceDiagram
     Note over w: not my turn
     g -->> b: approve Undo
     Note over b: my turn
-    Note over b: ban Undo
     g -->> w: response
     else reject
     w -->> g: reject Undo
