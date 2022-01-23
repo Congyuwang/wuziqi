@@ -121,3 +121,21 @@ pub struct FieldStateNullable {
     pub latest: Option<(u8, u8, Color)>,
     pub field: [[State; 15]; 15],
 }
+
+/// client time should be shorter
+///
+/// 0 means no restriction
+pub struct SessionConfig {
+    undo_request_timeout: u64,
+    play_timeout: u64,
+}
+
+/// by default no restriction
+impl Default for SessionConfig {
+    fn default() -> Self {
+        SessionConfig {
+            undo_request_timeout: 0,
+            play_timeout: 0,
+        }
+    }
+}

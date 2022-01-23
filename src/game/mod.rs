@@ -11,8 +11,6 @@ pub use session::{
     PlayerQuitReason, PlayerResponse, UndoResponse,
 };
 
-pub const AUTO_REJECT_SECONDS: u64 = 15;
-
 #[cfg(test)]
 mod test_game {
     use crate::game::Color::{Black, White};

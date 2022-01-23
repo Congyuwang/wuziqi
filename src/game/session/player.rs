@@ -12,7 +12,6 @@ use async_std::channel::{bounded, Receiver, Sender};
 use async_std::task;
 use futures::{stream_select, StreamExt};
 use log::trace;
-use crate::game::AUTO_REJECT_SECONDS;
 
 pub(crate) fn new_session_player(
     player_id: u64,
@@ -228,11 +227,6 @@ async fn on_opponent_undo_request(
         responses
             .send(Response::Player(PlayerResponse::UndoRequest))
             .await?;
-        // start a timer and send TimeOutReject
-        let timer = task::spawn(async {
-            task::sleep(Duration::from_secs(AUTO_REJECT_SECONDS)).await;
-            responses.send(Response::Session(SessionPlayerAction::Undo(SessionUndoAction::TimeOutReject))).await;
-        });
     } else {
         // auto reject undo request when I have already moved
         responses
