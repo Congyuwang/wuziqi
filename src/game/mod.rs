@@ -6,22 +6,20 @@ mod game_field;
 mod session;
 
 pub use game_field::{compress_field, decompress_field, Color, State};
-pub use session::{
-    new_session, FieldState, FieldStateNullable, GameQuitResponse, GameResult, Player,
-    PlayerQuitReason, PlayerResponse, UndoResponse,
-};
+pub use session::{new_session, Player, PlayerQuitReason, PlayerResponse, SessionConfig};
 
 #[cfg(test)]
 mod test_game {
     use crate::game::Color::{Black, White};
-    use crate::game::{new_session, Color, Player, PlayerQuitReason, PlayerResponse};
+    use crate::game::{
+        new_session, Color, Player, PlayerQuitReason, PlayerResponse, SessionConfig,
+    };
     use async_std::channel::Receiver;
     use async_std::task;
     use async_std::task::JoinHandle;
     use futures::executor::block_on;
     use futures::future::join3;
     use futures::StreamExt;
-    use log::{info, LevelFilter};
     use std::time::Duration;
 
     fn responses_future(color: Color, mut listener: Receiver<PlayerResponse>) -> JoinHandle<()> {
@@ -33,13 +31,15 @@ mod test_game {
     }
 
     async fn play_and_wait(player: &Player, x: u8, y: u8) {
+        println!("play ({x}, {y})");
         player.play(x, y).await.unwrap();
         task::sleep(Duration::from_millis(100)).await;
     }
 
     #[test]
     fn test_play_on_occupied_error() {
-        let (mut black, mut white) = new_session(1000, 100, 200);
+        let config = SessionConfig::default();
+        let (mut black, mut white) = new_session(1000, 100, 200, config);
         let rsp_b = responses_future(Black, black.get_listener().unwrap());
         let rsp_w = responses_future(White, white.get_listener().unwrap());
         let actions = task::spawn(async move {
@@ -54,7 +54,8 @@ mod test_game {
 
     #[test]
     fn test_white_wins() {
-        let (mut black, mut white) = new_session(1000, 100, 200);
+        let config = SessionConfig::default();
+        let (mut black, mut white) = new_session(1000, 100, 200, config);
         let rsp_b = responses_future(Black, black.get_listener().unwrap());
         let rsp_w = responses_future(White, white.get_listener().unwrap());
         let actions = task::spawn(async move {
@@ -75,7 +76,8 @@ mod test_game {
 
     #[test]
     fn test_black_wins() {
-        let (mut black, mut white) = new_session(1000, 100, 200);
+        let config = SessionConfig::default();
+        let (mut black, mut white) = new_session(1000, 100, 200, config);
         let rsp_b = responses_future(Black, black.get_listener().unwrap());
         let rsp_w = responses_future(White, white.get_listener().unwrap());
         let actions = task::spawn(async move {
@@ -95,7 +97,8 @@ mod test_game {
 
     #[test]
     fn test_ignore_repeated_request() {
-        let (mut black, mut white) = new_session(1000, 100, 200);
+        let config = SessionConfig::default();
+        let (mut black, mut white) = new_session(1000, 100, 200, config);
         let rsp_b = responses_future(Black, black.get_listener().unwrap());
         let rsp_w = responses_future(White, white.get_listener().unwrap());
         let actions = task::spawn(async move {
@@ -119,7 +122,8 @@ mod test_game {
 
     #[test]
     fn test_quit_game() {
-        let (mut black, mut white) = new_session(1000, 100, 200);
+        let config = SessionConfig::default();
+        let (mut black, mut white) = new_session(1000, 100, 200, config);
         let rsp_b = responses_future(Black, black.get_listener().unwrap());
         let rsp_w = responses_future(White, white.get_listener().unwrap());
         let actions = task::spawn(async move {
@@ -134,7 +138,8 @@ mod test_game {
 
     #[test]
     fn test_undo_approve_game() {
-        let (mut black, mut white) = new_session(1000, 100, 200);
+        let config = SessionConfig::default();
+        let (mut black, mut white) = new_session(1000, 100, 200, config);
         let rsp_b = responses_future(Black, black.get_listener().unwrap());
         let rsp_w = responses_future(White, white.get_listener().unwrap());
         let actions = task::spawn(async move {
@@ -154,7 +159,8 @@ mod test_game {
 
     #[test]
     fn test_undo_reject_game() {
-        let (mut black, mut white) = new_session(1000, 100, 200);
+        let config = SessionConfig::default();
+        let (mut black, mut white) = new_session(1000, 100, 200, config);
         let rsp_b = responses_future(Black, black.get_listener().unwrap());
         let rsp_w = responses_future(White, white.get_listener().unwrap());
         let actions = task::spawn(async move {
@@ -168,6 +174,63 @@ mod test_game {
             play_and_wait(&black, 6, 5).await;
             task::sleep(Duration::from_millis(100)).await;
             black.quit(PlayerQuitReason::Quit).await.unwrap();
+        });
+        block_on(join3(rsp_b, rsp_w, actions));
+    }
+
+    #[test]
+    fn test_white_play_timeout() {
+        let mut config = SessionConfig::default();
+        config.play_timeout = 1;
+        let (mut black, mut white) = new_session(1000, 100, 200, config);
+        let rsp_b = responses_future(Black, black.get_listener().unwrap());
+        let rsp_w = responses_future(White, white.get_listener().unwrap());
+        let actions = task::spawn(async move {
+            play_and_wait(&black, 5, 5).await;
+            play_and_wait(&white, 5, 6).await;
+            play_and_wait(&black, 6, 5).await;
+        });
+        block_on(join3(rsp_b, rsp_w, actions));
+    }
+
+    #[test]
+    fn test_approve_timeout() {
+        let mut config = SessionConfig::default();
+        config.undo_request_timeout = 1;
+        let (mut black, mut white) = new_session(1000, 100, 200, config);
+        let rsp_b = responses_future(Black, black.get_listener().unwrap());
+        let rsp_w = responses_future(White, white.get_listener().unwrap());
+        let actions = task::spawn(async move {
+            play_and_wait(&black, 5, 5).await;
+            play_and_wait(&white, 5, 6).await;
+            play_and_wait(&black, 6, 5).await;
+            black.request_undo().await.unwrap();
+            task::sleep(Duration::from_millis(1200)).await;
+            black.quit(PlayerQuitReason::Quit).await.unwrap();
+        });
+        block_on(join3(rsp_b, rsp_w, actions));
+    }
+
+    #[test]
+    fn test_approve_play_timeout_pause() {
+        let mut config = SessionConfig::default();
+        config.undo_request_timeout = 2;
+        config.play_timeout = 1;
+        let (mut black, mut white) = new_session(1000, 100, 200, config);
+        let rsp_b = responses_future(Black, black.get_listener().unwrap());
+        let rsp_w = responses_future(White, white.get_listener().unwrap());
+        let actions = task::spawn(async move {
+            play_and_wait(&black, 5, 5).await;
+            play_and_wait(&white, 5, 6).await;
+            play_and_wait(&black, 6, 5).await;
+            black.request_undo().await.unwrap();
+            // should undo-request-timeout, but should not play-timeout
+            task::sleep(Duration::from_millis(1500)).await;
+            play_and_wait(&white, 6, 6).await;
+            // should timeout after this
+            task::sleep(Duration::from_millis(1500)).await;
+            // this quit action is invalid
+            white.quit(PlayerQuitReason::Quit).await.unwrap();
         });
         block_on(join3(rsp_b, rsp_w, actions));
     }

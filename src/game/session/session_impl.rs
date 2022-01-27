@@ -1,11 +1,14 @@
 use crate::game::game_field::Color::{self, Black, White};
 use crate::game::game_field::{new_field, GameCommand, GameResponse};
+use crate::game::session::api::SessionConfig;
+use crate::game::session::api::{
+    GameQuitResponse, GameResult, Player, PlayerQuitReason, UndoResponse,
+};
 use crate::game::session::messages::{
     broadcast_to_players, message_receiver, message_sender, SessionKiller, SessionMessage,
     SessionPlayerAction, SessionPlayerResponse, SessionResponse, SessionUndoAction,
 };
 use crate::game::session::player::new_session_player;
-use crate::game::session::{GameQuitResponse, GameResult, Player, PlayerQuitReason, UndoResponse};
 use anyhow::Result;
 use async_std::channel::Sender;
 use async_std::task;
@@ -17,14 +20,15 @@ pub fn new_session(
     session_id: u64,
     black_player_id: u64,
     white_player_id: u64,
+    session_config: SessionConfig,
 ) -> (Player, Player) {
     info!(
         "game session {} launched with black player {} and white player {}",
         session_id, black_player_id, white_player_id
     );
     // start player tasks
-    let black_player = new_session_player(black_player_id, Black);
-    let white_player = new_session_player(white_player_id, White);
+    let black_player = new_session_player(black_player_id, Black, session_config.clone());
+    let white_player = new_session_player(white_player_id, White, session_config);
     // start field task
     let (cmd, rsp) = new_field(session_id);
     // start message receiver task
@@ -100,6 +104,7 @@ async fn handle_player_message(
         SessionPlayerAction::Undo(undo_action) => {
             on_player_undo(player_color, undo_action, responses).await?
         }
+        SessionPlayerAction::PlayTimeout => on_player_timeout(player_color, responses).await?,
     }
     Ok(())
 }
@@ -162,6 +167,15 @@ async fn on_player_request_undo(
         .await?)
 }
 
+async fn on_player_timeout(player_color: Color, responses: &Sender<SessionResponse>) -> Result<()> {
+    let quit_rsp = match player_color {
+        Black => GameQuitResponse::GameEnd(GameResult::BlackTimeout),
+        White => GameQuitResponse::GameEnd(GameResult::WhiteTimeout),
+    };
+    broadcast_to_players(SessionPlayerResponse::Quit(quit_rsp), responses).await?;
+    Ok(())
+}
+
 /// handle events when player plays a step
 async fn on_player_play(
     (x, y): (u8, u8),
@@ -201,9 +215,9 @@ async fn on_player_undo(
                 ))
                 .await?
         }
-        SessionUndoAction::TimeOutReject => {
+        SessionUndoAction::TimeoutReject => {
             broadcast_to_players(
-                SessionPlayerResponse::Undo(UndoResponse::TimeOutRejected),
+                SessionPlayerResponse::Undo(UndoResponse::TimeoutRejected),
                 responses,
             )
             .await?;

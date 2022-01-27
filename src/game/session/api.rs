@@ -68,7 +68,6 @@ pub enum PlayerQuitReason {
 #[derive(Clone, Debug)]
 pub enum PlayerResponse {
     FieldUpdate(FieldState),
-    InvalidMovement,
     UndoRequest,
     Undo(UndoResponse),
     /// other player quit or game error
@@ -79,7 +78,7 @@ pub enum PlayerResponse {
 #[derive(Clone, Debug)]
 pub enum UndoResponse {
     /// broadcast to both players
-    TimeOutRejected,
+    TimeoutRejected,
     /// broadcast to both players
     Undo(FieldStateNullable),
     /// send only to requester
@@ -101,6 +100,8 @@ pub enum GameQuitResponse {
 /// result of the game
 #[derive(Clone, Debug)]
 pub enum GameResult {
+    BlackTimeout,
+    WhiteTimeout,
     BlackWins,
     WhiteWins,
     Draw,
@@ -124,10 +125,12 @@ pub struct FieldStateNullable {
 
 /// client time should be shorter
 ///
-/// 0 means no restriction
+/// 0 means no timeout
+#[derive(Clone)]
 pub struct SessionConfig {
-    undo_request_timeout: u64,
-    play_timeout: u64,
+    pub undo_request_timeout: u64,
+    pub undo_dialogue_extra_seconds: u64,
+    pub play_timeout: u64,
 }
 
 /// by default no restriction
@@ -135,6 +138,7 @@ impl Default for SessionConfig {
     fn default() -> Self {
         SessionConfig {
             undo_request_timeout: 0,
+            undo_dialogue_extra_seconds: 0,
             play_timeout: 0,
         }
     }

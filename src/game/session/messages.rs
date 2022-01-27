@@ -1,7 +1,8 @@
 use crate::game::game_field::Color::{Black, White};
 use crate::game::game_field::{Color, GameCommand, GameResponse, State};
-use crate::game::session::api::{FieldState, PlayerQuitReason};
-use crate::game::session::{FieldStateNullable, GameQuitResponse, GameResult, UndoResponse};
+use crate::game::session::{
+    FieldState, FieldStateNullable, GameQuitResponse, GameResult, PlayerQuitReason, UndoResponse,
+};
 use crate::CHANNEL_SIZE;
 use anyhow::Result;
 use async_std::channel::{bounded, Receiver, Sender};
@@ -30,6 +31,7 @@ pub(crate) enum UndoAction {
 #[derive(Debug)]
 pub(crate) enum SessionPlayerAction {
     Play(u8, u8),
+    PlayTimeout,
     RequestUndo,
     Undo(SessionUndoAction),
     /// player sends this if it needs to quit
@@ -42,7 +44,7 @@ pub(crate) enum SessionPlayerResponse {
     FieldUpdate(FieldState),
     UndoRequest,
     Undo(UndoResponse),
-    /// other player quit or game error
+    /// game end, player quit, error, and etc,
     Quit(GameQuitResponse),
 }
 
@@ -52,7 +54,7 @@ pub(crate) enum SessionUndoAction {
     Approve,
     Reject,
     AutoReject,
-    TimeOutReject,
+    TimeoutReject,
 }
 
 /// messages sent to the session from players or game
@@ -146,6 +148,8 @@ impl std::fmt::Display for GameResult {
             GameResult::BlackWins => f.write_str("BlackWins"),
             GameResult::WhiteWins => f.write_str("WhiteWins"),
             GameResult::Draw => f.write_str("Draw"),
+            GameResult::BlackTimeout => f.write_str("BlackTimeout"),
+            GameResult::WhiteTimeout => f.write_str("WhiteTimeout"),
         }
     }
 }
