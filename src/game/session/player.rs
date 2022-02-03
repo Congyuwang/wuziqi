@@ -118,12 +118,16 @@ async fn handle_session_message(
 }
 
 /// play when is_my_turn, not_my_turn after play
+///
+/// ignore out of bound positions
 async fn on_player_play(x: u8, y: u8, player_state: &mut PlayerState) -> Result<()> {
     if player_state.undo_dialogue.is_none() && player_state.my_turn.is_some() {
-        let timeout_sender = player_state.my_turn.take().unwrap();
-        timeout_sender
-            .send(Response::Session(SessionPlayerAction::Play(x, y)))
-            .await?;
+        if x < 15 && y < 15 {
+            let timeout_sender = player_state.my_turn.take().unwrap();
+            timeout_sender
+                .send(Response::Session(SessionPlayerAction::Play(x, y)))
+                .await?;
+        }
     }
     Ok(())
 }
