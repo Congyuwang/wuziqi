@@ -109,7 +109,7 @@ pub enum GameResult {
 
 /// this struct represents a game field
 /// and also the coordinate of the latest position
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct FieldState {
     pub latest: (u8, u8, Color),
     pub field: [[State; 15]; 15],
@@ -117,7 +117,7 @@ pub struct FieldState {
 
 /// this struct represents a game field
 /// and also the coordinate of the latest position
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct FieldStateNullable {
     pub latest: Option<(u8, u8, Color)>,
     pub field: [[State; 15]; 15],

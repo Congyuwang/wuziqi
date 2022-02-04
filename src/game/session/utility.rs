@@ -106,6 +106,8 @@ impl<T: Send + 'static> TimeoutGate<T> {
 
     /// sleep for sometime and send Timeout message
     /// this may be called only once
+    ///
+    /// if `delay` is None, the alarm is not fired.
     fn fire_alarm(&mut self, delay: Option<Duration>, seq: usize) {
         match delay {
             None => {}

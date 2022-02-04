@@ -6,7 +6,10 @@ mod game_field;
 mod session;
 
 pub use game_field::{compress_field, decompress_field, Color, State};
-pub use session::{new_session, Player, PlayerQuitReason, PlayerResponse, SessionConfig};
+pub use session::{
+    new_session, FieldState, FieldStateNullable, Player, PlayerQuitReason, PlayerResponse,
+    SessionConfig,
+};
 
 #[cfg(test)]
 mod test_game {
@@ -214,7 +217,7 @@ mod test_game {
     #[test]
     fn test_approve_play_timeout_pause() {
         let mut config = SessionConfig::default();
-        config.undo_request_timeout = 2;
+        config.undo_request_timeout = 1;
         config.play_timeout = 1;
         let (mut black, mut white) = new_session(1000, 100, 200, config);
         let rsp_b = responses_future(Black, black.get_listener().unwrap());
