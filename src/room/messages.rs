@@ -8,7 +8,6 @@ use xactor::Actor;
 
 pub const SEPARATOR: u8 = 255u8;
 
-// TODO: chat message
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) enum Messages {
     /// create a new room
@@ -32,12 +31,12 @@ pub(crate) enum Messages {
     RejectUndo,
     /// quit game session (only quit this round).
     QuitGameSession,
+    /// chat message
+    ChatMessage(String),
     /// exit game (quit game and room), close connection
     ExitGame,
-    /// client disconnect detected
-    Disconnect,
-    /// Pong
-    Pong(u8),
+    /// client error
+    ClientError(String),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -90,8 +89,8 @@ pub(crate) enum Responses {
     OpponentDisconnected,
     /// game session ends in error
     GameSessionError(String),
-    /// Ping
-    Ping(u8),
+    /// ChatMessage
+    ChatMessage(String),
 }
 
 impl Messages {
@@ -108,13 +107,15 @@ impl Messages {
             Messages::RejectUndo => 8,
             Messages::QuitGameSession => 9,
             Messages::ExitGame => 10,
-            Messages::Disconnect => 11,
-            Messages::Pong(_) => 100,
+            Messages::ClientError(_) => 12,
+            Messages::ChatMessage(_) => 200,
         }
     }
+}
 
-    pub(crate) fn encode(&self) -> Box<[u8]> {
-        match &self {
+impl Into<Vec<u8>> for Messages {
+    fn into(self) -> Vec<u8> {
+        match self {
             Messages::CreateRoom
             | Messages::QuitRoom
             | Messages::Ready
@@ -123,31 +124,42 @@ impl Messages {
             | Messages::ApproveUndo
             | Messages::RejectUndo
             | Messages::QuitGameSession
-            | Messages::ExitGame
-            | Messages::Disconnect => [self.message_type(), SEPARATOR].to_vec().into_boxed_slice(),
-            Messages::JoinRoom(token) => {
+            | Messages::ExitGame => [self.message_type(), SEPARATOR].to_vec(),
+            Messages::JoinRoom(ref token) => {
                 let token_string = token.as_code().unwrap();
                 let mut dat = Vec::new();
                 dat.push(self.message_type());
                 dat.extend(token_string.as_bytes());
                 dat.push(SEPARATOR);
-                dat.into_boxed_slice()
+                dat
             }
-            Messages::Play(x, y) => [self.message_type(), *x, *y, SEPARATOR]
-                .to_vec()
-                .into_boxed_slice(),
-            Messages::Pong(seq) => [self.message_type(), *seq, SEPARATOR]
-                .to_vec()
-                .into_boxed_slice(),
+            Messages::Play(x, y) => [self.message_type(), x, y, SEPARATOR].to_vec(),
+            Messages::ChatMessage(ref msg) => {
+                let mut dat = Vec::new();
+                dat.push(self.message_type());
+                dat.extend(msg.as_bytes());
+                dat.push(SEPARATOR);
+                dat
+            }
+            Messages::ClientError(ref msg) => {
+                let mut dat = Vec::new();
+                dat.push(self.message_type());
+                dat.extend(msg.as_bytes());
+                dat.push(SEPARATOR);
+                dat
+            }
         }
     }
+}
+impl TryFrom<Vec<u8>> for Messages {
+    type Error = anyhow::Error;
 
     /// this bytes include message `SEPARATOR`
-    pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
+    fn try_from(bytes: Vec<u8>) -> Result<Self> {
         match bytes[0] {
             0 => Ok(Messages::CreateRoom),
             1 => {
-                let token = decode_utf8_string(bytes)?;
+                let token = decode_utf8_string(&bytes)?;
                 Ok(Messages::JoinRoom(RoomToken::from_code(&token)?))
             }
             2 => Ok(Messages::QuitRoom),
@@ -166,15 +178,8 @@ impl Messages {
             8 => Ok(Messages::RejectUndo),
             9 => Ok(Messages::QuitGameSession),
             10 => Ok(Messages::ExitGame),
-            11 => Ok(Messages::Disconnect),
-            100 => {
-                if bytes.len() != 3 {
-                    Err(Error::msg(
-                        "client message decode error, incorrect byte length",
-                    ))?
-                }
-                Ok(Messages::Pong(bytes[1]))
-            }
+            12 => Ok(Messages::ClientError(decode_utf8_string(&bytes)?)),
+            200 => Ok(Messages::ChatMessage(decode_utf8_string(&bytes)?)),
             _ => Err(Error::msg("client messages decode error")),
         }
     }
@@ -207,11 +212,13 @@ impl Responses {
             Responses::OpponentExitGame => 21,
             Responses::OpponentDisconnected => 22,
             Responses::GameSessionError(_) => 23,
-            Responses::Ping(_) => 100,
+            Responses::ChatMessage(_) => 200,
         }
     }
+}
 
-    pub(crate) fn encode(&self) -> Box<[u8]> {
+impl Into<Vec<u8>> for Responses {
+    fn into(self) -> Vec<u8> {
         match &self {
             Responses::JoinRoomSuccess
             | Responses::JoinRoomFailureTokenNotFound
@@ -231,23 +238,17 @@ impl Responses {
             | Responses::GameEndDraw
             | Responses::OpponentQuitGameSession
             | Responses::OpponentExitGame
-            | Responses::OpponentDisconnected => [self.response_type(), SEPARATOR]
-                .to_vec()
-                .into_boxed_slice(),
+            | Responses::OpponentDisconnected => [self.response_type(), SEPARATOR].to_vec(),
             Responses::RoomCreated(token) => {
                 let mut dat = Vec::new();
                 dat.push(self.response_type());
                 dat.extend(token.as_bytes());
                 dat.push(SEPARATOR);
-                dat.into_boxed_slice()
+                dat
             }
             Responses::GameStarted(c) => match c {
-                Color::Black => [self.response_type(), 0, SEPARATOR]
-                    .to_vec()
-                    .into_boxed_slice(),
-                Color::White => [self.response_type(), 1, SEPARATOR]
-                    .to_vec()
-                    .into_boxed_slice(),
+                Color::Black => [self.response_type(), 0, SEPARATOR].to_vec(),
+                Color::White => [self.response_type(), 1, SEPARATOR].to_vec(),
             },
             Responses::FieldUpdate(f) => {
                 let mut dat = Vec::new();
@@ -266,7 +267,7 @@ impl Responses {
                         .flatten(),
                 );
                 dat.push(SEPARATOR);
-                dat.into_boxed_slice()
+                dat
             }
             Responses::Undo(f) => {
                 let mut dat = Vec::new();
@@ -291,25 +292,34 @@ impl Responses {
                         .flatten(),
                 );
                 dat.push(SEPARATOR);
-                dat.into_boxed_slice()
+                dat
             }
             Responses::GameSessionError(e) => {
                 let mut dat = Vec::new();
                 dat.push(self.response_type());
                 dat.extend(e.as_bytes());
                 dat.push(SEPARATOR);
-                dat.into_boxed_slice()
+                dat
             }
-            Responses::Ping(seq) => [self.response_type(), *seq, SEPARATOR]
-                .to_vec()
-                .into_boxed_slice(),
+            Responses::ChatMessage(msg) => {
+                let mut dat = Vec::new();
+                dat.push(self.response_type());
+                dat.extend(msg.as_bytes());
+                dat.push(SEPARATOR);
+                dat
+            }
         }
     }
+}
+
+impl TryFrom<Vec<u8>> for Responses {
+    type Error = anyhow::Error;
 
     /// this bytes include message `SEPARATOR`
     #[unroll_for_loops]
-    pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
+    fn try_from(bytes: Vec<u8>) -> Result<Self> {
         match bytes[0] {
+            0 => Ok(Responses::RoomCreated(decode_utf8_string(&bytes)?)),
             1 => Ok(Responses::JoinRoomSuccess),
             2 => Ok(Responses::JoinRoomFailureTokenNotFound),
             3 => Ok(Responses::JoinRoomFailureRoomFull),
@@ -329,10 +339,7 @@ impl Responses {
             20 => Ok(Responses::OpponentQuitGameSession),
             21 => Ok(Responses::OpponentExitGame),
             22 => Ok(Responses::OpponentDisconnected),
-            0 => {
-                let token = decode_utf8_string(bytes)?;
-                Ok(Responses::RoomCreated(token))
-            }
+            200 => Ok(Responses::ChatMessage(decode_utf8_string(&bytes)?)),
             8 => {
                 if bytes.len() != 3 {
                     Err(Error::msg(
@@ -420,18 +427,10 @@ impl Responses {
                 Ok(Responses::Undo(field_state))
             }
             23 => {
-                let error_message = decode_utf8_string(bytes)?;
+                let error_message = decode_utf8_string(&bytes)?;
                 Ok(Responses::GameSessionError(error_message))
             }
-            100 => {
-                if bytes.len() != 3 {
-                    Err(Error::msg(
-                        "client message decode error, incorrect byte length",
-                    ))?
-                }
-                Ok(Responses::Ping(bytes[1]))
-            }
-            _ => Err(Error::msg("server response decode error"))
+            _ => Err(Error::msg("server response decode error")),
         }
     }
 }
@@ -459,12 +458,14 @@ mod test_encode_decode {
     use rand::thread_rng;
 
     fn assert_msg_eq(msg: Messages) {
-        let decoded_msg = Messages::decode(&msg.encode()).unwrap();
+        let decoded_msg =
+            Messages::try_from(<Messages as Into<Vec<u8>>>::into(msg.clone())).unwrap();
         assert_eq!(msg, decoded_msg)
     }
 
     fn assert_rsp_eq(rsp: Responses) {
-        let decoded_rsp = Responses::decode(&rsp.encode()).unwrap();
+        let decoded_rsp =
+            Responses::try_from(<Responses as Into<Vec<u8>>>::into(rsp.clone())).unwrap();
         assert_eq!(rsp, decoded_rsp)
     }
 
@@ -482,8 +483,8 @@ mod test_encode_decode {
         assert_msg_eq(Messages::RejectUndo);
         assert_msg_eq(Messages::QuitGameSession);
         assert_msg_eq(Messages::ExitGame);
-        assert_msg_eq(Messages::Disconnect);
-        assert_msg_eq(Messages::Pong(110));
+        assert_msg_eq(Messages::ClientError("decode error".to_string()));
+        assert_msg_eq(Messages::ChatMessage("chat message".to_string()));
     }
 
     #[test]
@@ -524,7 +525,7 @@ mod test_encode_decode {
         assert_rsp_eq(Responses::OpponentQuitGameSession);
         assert_rsp_eq(Responses::OpponentExitGame);
         assert_rsp_eq(Responses::OpponentDisconnected);
-        assert_rsp_eq(Responses::Ping(110));
+        assert_rsp_eq(Responses::ChatMessage("chat message".to_string()));
         assert_rsp_eq(Responses::GameSessionError("some error".to_string()));
     }
 }
