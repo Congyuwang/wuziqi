@@ -6,6 +6,7 @@ use crate::game::session::utility::TimeoutGate;
 use crate::game::session::{
     FieldState, GameQuitResponse, PlayerQuitReason, PlayerResponse, SessionConfig, UndoResponse,
 };
+use crate::game::Color::Black;
 use crate::CHANNEL_SIZE;
 use anyhow::Result;
 use async_std::channel::{bounded, Receiver, Sender};
@@ -17,7 +18,7 @@ use std::time::Duration;
 
 pub(crate) fn new_session_player(
     player_id: u64,
-    color: Color,
+    my_color: Color,
     config: SessionConfig,
 ) -> (
     Sender<PlayerAction>,
@@ -34,10 +35,10 @@ pub(crate) fn new_session_player(
         let responses = message_sender(action_pipe_to_session.0, pub_response_pipe.0);
         let (killer, mut messages) =
             message_receiver(response_pipe_to_session.1, pub_action_pipe.1);
-        let mut player_state = PlayerState::new(color, responses.clone(), config);
+        let mut player_state = PlayerState::new(my_color, responses.clone(), config);
         while let Some(message) = messages.next().await {
             if match message {
-                Message::Player(action) => {
+                Msg::Player(action) => {
                     #[cfg(debug_assertions)]
                     trace!(
                         "remote player action \n{:?}\n received by player {}",
@@ -48,18 +49,24 @@ pub(crate) fn new_session_player(
                         .await
                         .is_err()
                 }
-                Message::Session(response) => {
+                Msg::Session(response) => {
                     #[cfg(debug_assertions)]
                     trace!(
                         "session response \n{:?}\n received by player {}",
                         response,
                         player_id
                     );
-                    handle_session_message(color, response, &mut player_state, &responses, &killer)
-                        .await
-                        .is_err()
+                    handle_session_message(
+                        my_color,
+                        response,
+                        &mut player_state,
+                        &responses,
+                        &killer,
+                    )
+                    .await
+                    .is_err()
                 }
-                Message::Kill => {
+                Msg::Kill => {
                     #[cfg(debug_assertions)]
                     trace!("player {} killed", player_id);
                     break;
@@ -97,7 +104,7 @@ async fn handle_player_message(
 
 /// handle incoming message from game session
 async fn handle_session_message(
-    color: Color,
+    my_color: Color,
     response: SessionPlayerResponse,
     player_state: &mut PlayerState,
     responses: &Sender<Response>,
@@ -105,13 +112,13 @@ async fn handle_session_message(
 ) -> Result<()> {
     match response {
         SessionPlayerResponse::FieldUpdate(field_state) => {
-            on_field_update(color, field_state, player_state, responses).await
+            on_field_update(my_color, field_state, player_state, responses).await
         }
         SessionPlayerResponse::UndoRequest => {
             on_opponent_undo_request(player_state, responses).await
         }
         SessionPlayerResponse::Undo(undo_rsp) => {
-            on_undo_response(color, undo_rsp, player_state, responses).await
+            on_undo_response(my_color, undo_rsp, player_state, responses).await
         }
         SessionPlayerResponse::Quit(quit_rsp) => on_game_quit(quit_rsp, responses, killer).await,
     }
@@ -195,13 +202,13 @@ async fn on_quit_message(
 
 /// receiving play responses from either me or opponent
 async fn on_field_update(
-    color: Color,
+    my_color: Color,
     field_state: FieldState,
     player_state: &mut PlayerState,
     responses: &Sender<Response>,
 ) -> Result<()> {
     debug_assert!(player_state.undo_dialogue.is_none());
-    if field_state.latest.2 == color {
+    if field_state.latest.2 == my_color {
         // when the latest update is my color, allow undo
         player_state.allow_undo = true;
     } else {
@@ -240,7 +247,7 @@ async fn on_opponent_undo_request(
 
 /// when player receives undo response from game session
 async fn on_undo_response(
-    color: Color,
+    my_color: Color,
     undo_rsp: UndoResponse,
     player_state: &mut PlayerState,
     responses: &Sender<Response>,
@@ -250,10 +257,14 @@ async fn on_undo_response(
         UndoResponse::Undo(f) => {
             match &f.latest {
                 // if undid the first step
-                None => player_state.now_my_turn(),
-                Some((_, _, c)) => {
+                None => {
+                    if my_color == Black {
+                        player_state.now_my_turn();
+                    }
+                }
+                Some((_, _, latest_step_color)) => {
                     // upon receiving undo approval, and it is my turn
-                    if *c != color {
+                    if *latest_step_color != my_color {
                         player_state.now_my_turn();
                     }
                 }
@@ -296,11 +307,11 @@ fn assert_is_requesting_undo(player_state: &PlayerState) {
 }
 
 /// utility for killing player
-struct Killer(Sender<Message>);
+struct Killer(Sender<Msg>);
 
 impl Killer {
     async fn kill(&self) -> Result<()> {
-        Ok(self.0.send(Message::Kill).await?)
+        Ok(self.0.send(Msg::Kill).await?)
     }
 }
 
@@ -327,12 +338,12 @@ fn message_sender(
 fn message_receiver(
     session: Receiver<SessionPlayerResponse>,
     player: Receiver<PlayerAction>,
-) -> (Killer, Receiver<Message>) {
+) -> (Killer, Receiver<Msg>) {
     let (message_sender, messages) = bounded(CHANNEL_SIZE);
     let killer = message_sender.clone();
     task::spawn(async move {
-        let session = session.map(Message::Session).fuse();
-        let player = player.map(Message::Player).fuse();
+        let session = session.map(Msg::Session).fuse();
+        let player = player.map(Msg::Player).fuse();
         let mut fused = stream_select!(session, player);
         while let Some(message) = fused.next().await {
             if message_sender.send(message).await.is_err() {
@@ -352,7 +363,7 @@ struct PlayerState {
 }
 
 impl PlayerState {
-    fn new(color: Color, sender: Sender<Response>, config: SessionConfig) -> Self {
+    fn new(my_color: Color, sender: Sender<Response>, config: SessionConfig) -> Self {
         let mut new_state = PlayerState {
             message_sender: sender,
             config,
@@ -361,7 +372,7 @@ impl PlayerState {
             undo_dialogue: None,
         };
         // black first
-        if let Color::Black = color {
+        if let Color::Black = my_color {
             PlayerState::now_my_turn(&mut new_state)
         }
         new_state
@@ -412,7 +423,7 @@ impl PlayerState {
     }
 }
 
-enum Message {
+enum Msg {
     Player(PlayerAction),
     Session(SessionPlayerResponse),
     Kill,
