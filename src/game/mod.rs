@@ -7,15 +7,15 @@ mod session;
 
 pub use game_field::{compress_field, decompress_field, Color, State};
 pub use session::{
-    new_session, FieldState, FieldStateNullable, Player, PlayerQuitReason, PlayerResponse,
-    SessionConfig,
+    new_session, Commands, FieldState, FieldStateNullable, GameQuitResponse, GameResult,
+    PlayerQuitReason, PlayerResponse, SessionConfig, UndoResponse,
 };
 
 #[cfg(test)]
 mod test_game {
     use crate::game::Color::{Black, White};
     use crate::game::{
-        new_session, Color, Player, PlayerQuitReason, PlayerResponse, SessionConfig,
+        new_session, Color, Commands, PlayerQuitReason, PlayerResponse, SessionConfig,
     };
     use async_std::channel::Receiver;
     use async_std::task;
@@ -33,9 +33,9 @@ mod test_game {
         })
     }
 
-    async fn play_and_wait(player: &Player, x: u8, y: u8) {
+    async fn play_and_wait(player: &Commands, x: u8, y: u8) {
         println!("play ({x}, {y})");
-        player.play(x, y).await.unwrap();
+        player.play(x, y).await;
         task::sleep(Duration::from_millis(100)).await;
     }
 
@@ -110,9 +110,9 @@ mod test_game {
             play_and_wait(&black, 6, 6).await;
             play_and_wait(&white, 5, 7).await;
             // these three should be ignored
-            white.play(5, 8).await.unwrap();
-            white.play(5, 9).await.unwrap();
-            white.play(5, 10).await.unwrap();
+            white.play(5, 8).await;
+            white.play(5, 9).await;
+            white.play(5, 10).await;
             play_and_wait(&black, 7, 7).await;
             play_and_wait(&white, 5, 8).await;
             play_and_wait(&black, 8, 8).await;
@@ -134,7 +134,7 @@ mod test_game {
             play_and_wait(&white, 5, 6).await;
             play_and_wait(&black, 6, 6).await;
             play_and_wait(&white, 5, 7).await;
-            white.quit(PlayerQuitReason::Quit).await.unwrap();
+            white.quit(PlayerQuitReason::QuitSession).await;
         });
         block_on(join3(rsp_b, rsp_w, actions));
     }
@@ -148,14 +148,14 @@ mod test_game {
         let actions = task::spawn(async move {
             play_and_wait(&black, 5, 5).await;
             play_and_wait(&white, 5, 6).await;
-            white.request_undo().await.unwrap();
+            white.request_undo().await;
             task::sleep(Duration::from_millis(100)).await;
-            black.approve_undo().await.unwrap();
+            black.approve_undo().await;
             task::sleep(Duration::from_millis(100)).await;
             // play after undo
             play_and_wait(&white, 6, 5).await;
             task::sleep(Duration::from_millis(100)).await;
-            black.quit(PlayerQuitReason::Quit).await.unwrap();
+            black.quit(PlayerQuitReason::QuitSession).await;
         });
         block_on(join3(rsp_b, rsp_w, actions));
     }
@@ -169,14 +169,14 @@ mod test_game {
         let actions = task::spawn(async move {
             play_and_wait(&black, 5, 5).await;
             play_and_wait(&white, 5, 7).await;
-            white.request_undo().await.unwrap();
+            white.request_undo().await;
             task::sleep(Duration::from_millis(100)).await;
-            black.reject_undo().await.unwrap();
+            black.reject_undo().await;
             task::sleep(Duration::from_millis(100)).await;
             // play after undo
             play_and_wait(&black, 6, 5).await;
             task::sleep(Duration::from_millis(100)).await;
-            black.quit(PlayerQuitReason::Quit).await.unwrap();
+            black.quit(PlayerQuitReason::QuitSession).await;
         });
         block_on(join3(rsp_b, rsp_w, actions));
     }
@@ -207,9 +207,9 @@ mod test_game {
             play_and_wait(&black, 5, 5).await;
             play_and_wait(&white, 5, 6).await;
             play_and_wait(&black, 6, 5).await;
-            black.request_undo().await.unwrap();
+            black.request_undo().await;
             task::sleep(Duration::from_millis(1200)).await;
-            black.quit(PlayerQuitReason::Quit).await.unwrap();
+            black.quit(PlayerQuitReason::QuitSession).await;
         });
         block_on(join3(rsp_b, rsp_w, actions));
     }
@@ -226,14 +226,14 @@ mod test_game {
             play_and_wait(&black, 5, 5).await;
             play_and_wait(&white, 5, 6).await;
             play_and_wait(&black, 6, 5).await;
-            black.request_undo().await.unwrap();
+            black.request_undo().await;
             // should undo-request-timeout, but should not play-timeout
             task::sleep(Duration::from_millis(1500)).await;
             play_and_wait(&white, 6, 6).await;
             // should timeout after this
             task::sleep(Duration::from_millis(1500)).await;
             // this quit action is invalid
-            white.quit(PlayerQuitReason::Quit).await.unwrap();
+            white.quit(PlayerQuitReason::QuitSession).await;
         });
         block_on(join3(rsp_b, rsp_w, actions));
     }

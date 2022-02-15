@@ -21,7 +21,7 @@ pub struct Stopper {
 }
 
 impl Stopper {
-    fn stop(self) {
+    pub fn pause(self) {
         let _ = self.stopper_s.send(());
     }
 }
@@ -99,7 +99,7 @@ mod test_stoppable {
             assert!(matches!(r.next().await, Some(Next::Msg(0))));
             assert!(matches!(r.next().await, Some(Next::Msg(1))));
             assert!(matches!(r.next().await, Some(Next::Msg(2))));
-            stopper.stop();
+            stopper.pause();
             let mut r_new = match r.next().await {
                 Some(Next::Paused(r_new)) => r_new,
                 _ => panic!("should stop after calling `Stop::stop()`")
