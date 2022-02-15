@@ -1,13 +1,17 @@
+//! Implementation principles.
+//! - disconnection without clear exit signal is considered as disconnection.
 use crate::game::Color::{Black, White};
 use crate::game::{compress_field, decompress_field, Color, FieldState, FieldStateNullable};
-use crate::room::token::RoomToken;
+use crate::lobby::token::RoomToken;
+use crate::network_util::Conn;
 use anyhow::{Error, Result};
 use futures::TryFutureExt;
 use unroll::unroll_for_loops;
 use xactor::Actor;
 
-pub const SEPARATOR: u8 = 255u8;
+pub(crate) type ClientConnection = Conn<Responses, Messages>;
 
+// TODO: join random room
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) enum Messages {
     /// create a new room
@@ -34,8 +38,9 @@ pub(crate) enum Messages {
     /// chat message
     ChatMessage(String),
     /// exit game (quit game and room), close connection
+    /// exiting game without sending `ExitGame` signal is considered `Disconnected`
     ExitGame,
-    /// client error
+    /// client error: other errors excluding network error
     ClientError(String),
 }
 
@@ -65,7 +70,7 @@ pub(crate) enum Responses {
     UndoRequest,
     /// undo rejected by timeout
     UndoTimeoutRejected,
-    /// undo rejected due to synchronization
+    /// undo rejected due to synchronization reason
     UndoAutoRejected,
     /// undo approved
     Undo(FieldStateNullable),
@@ -124,28 +129,25 @@ impl Into<Vec<u8>> for Messages {
             | Messages::ApproveUndo
             | Messages::RejectUndo
             | Messages::QuitGameSession
-            | Messages::ExitGame => [self.message_type(), SEPARATOR].to_vec(),
+            | Messages::ExitGame => [self.message_type()].to_vec(),
             Messages::JoinRoom(ref token) => {
                 let token_string = token.as_code().unwrap();
                 let mut dat = Vec::new();
                 dat.push(self.message_type());
                 dat.extend(token_string.as_bytes());
-                dat.push(SEPARATOR);
                 dat
             }
-            Messages::Play(x, y) => [self.message_type(), x, y, SEPARATOR].to_vec(),
+            Messages::Play(x, y) => [self.message_type(), x, y].to_vec(),
             Messages::ChatMessage(ref msg) => {
                 let mut dat = Vec::new();
                 dat.push(self.message_type());
                 dat.extend(msg.as_bytes());
-                dat.push(SEPARATOR);
                 dat
             }
             Messages::ClientError(ref msg) => {
                 let mut dat = Vec::new();
                 dat.push(self.message_type());
                 dat.extend(msg.as_bytes());
-                dat.push(SEPARATOR);
                 dat
             }
         }
@@ -154,7 +156,6 @@ impl Into<Vec<u8>> for Messages {
 impl TryFrom<Vec<u8>> for Messages {
     type Error = anyhow::Error;
 
-    /// this bytes include message `SEPARATOR`
     fn try_from(bytes: Vec<u8>) -> Result<Self> {
         match bytes[0] {
             0 => Ok(Messages::CreateRoom),
@@ -166,7 +167,7 @@ impl TryFrom<Vec<u8>> for Messages {
             3 => Ok(Messages::Ready),
             4 => Ok(Messages::Unready),
             5 => {
-                if bytes.len() != 4 {
+                if bytes.len() != 3 {
                     Err(Error::msg(
                         "client message decode error, incorrect byte length",
                     ))?
@@ -238,17 +239,16 @@ impl Into<Vec<u8>> for Responses {
             | Responses::GameEndDraw
             | Responses::OpponentQuitGameSession
             | Responses::OpponentExitGame
-            | Responses::OpponentDisconnected => [self.response_type(), SEPARATOR].to_vec(),
+            | Responses::OpponentDisconnected => [self.response_type()].to_vec(),
             Responses::RoomCreated(token) => {
                 let mut dat = Vec::new();
                 dat.push(self.response_type());
                 dat.extend(token.as_bytes());
-                dat.push(SEPARATOR);
                 dat
             }
             Responses::GameStarted(c) => match c {
-                Color::Black => [self.response_type(), 0, SEPARATOR].to_vec(),
-                Color::White => [self.response_type(), 1, SEPARATOR].to_vec(),
+                Color::Black => [self.response_type(), 0].to_vec(),
+                Color::White => [self.response_type(), 1].to_vec(),
             },
             Responses::FieldUpdate(f) => {
                 let mut dat = Vec::new();
@@ -266,7 +266,6 @@ impl Into<Vec<u8>> for Responses {
                         .map(|x| [x.0, x.1, x.2, x.3])
                         .flatten(),
                 );
-                dat.push(SEPARATOR);
                 dat
             }
             Responses::Undo(f) => {
@@ -291,21 +290,18 @@ impl Into<Vec<u8>> for Responses {
                         .map(|x| [x.0, x.1, x.2, x.3])
                         .flatten(),
                 );
-                dat.push(SEPARATOR);
                 dat
             }
             Responses::GameSessionError(e) => {
                 let mut dat = Vec::new();
                 dat.push(self.response_type());
                 dat.extend(e.as_bytes());
-                dat.push(SEPARATOR);
                 dat
             }
             Responses::ChatMessage(msg) => {
                 let mut dat = Vec::new();
                 dat.push(self.response_type());
                 dat.extend(msg.as_bytes());
-                dat.push(SEPARATOR);
                 dat
             }
         }
@@ -315,7 +311,6 @@ impl Into<Vec<u8>> for Responses {
 impl TryFrom<Vec<u8>> for Responses {
     type Error = anyhow::Error;
 
-    /// this bytes include message `SEPARATOR`
     #[unroll_for_loops]
     fn try_from(bytes: Vec<u8>) -> Result<Self> {
         match bytes[0] {
@@ -341,7 +336,7 @@ impl TryFrom<Vec<u8>> for Responses {
             22 => Ok(Responses::OpponentDisconnected),
             200 => Ok(Responses::ChatMessage(decode_utf8_string(&bytes)?)),
             8 => {
-                if bytes.len() != 3 {
+                if bytes.len() != 2 {
                     Err(Error::msg(
                         "server response decode error, incorrect byte length",
                     ))?
@@ -356,8 +351,7 @@ impl TryFrom<Vec<u8>> for Responses {
                 Ok(Responses::GameStarted(color))
             }
             9 => {
-                // data length + separator byte
-                if bytes.len() != (1 + 3 + 4 * 15) + 1 {
+                if bytes.len() != 1 + 3 + 4 * 15 {
                     Err(Error::msg(
                         "server response decode error, incorrect byte length",
                     ))?
@@ -387,8 +381,7 @@ impl TryFrom<Vec<u8>> for Responses {
                 Ok(Responses::FieldUpdate(field_state))
             }
             13 => {
-                // data length + separator byte
-                if bytes.len() != (1 + 4 + 4 * 15) + 1 {
+                if bytes.len() != 1 + 4 + 4 * 15 {
                     Err(Error::msg(
                         "server response decode error, incorrect byte length",
                     ))?
@@ -436,7 +429,6 @@ impl TryFrom<Vec<u8>> for Responses {
 }
 
 /// This function will take care of the first message type byte
-/// and the ending `SEPARATOR` byte.
 fn decode_utf8_string(bytes: &[u8]) -> Result<String> {
     let bytes_len = bytes.len();
     if bytes_len < 2 {
@@ -444,8 +436,7 @@ fn decode_utf8_string(bytes: &[u8]) -> Result<String> {
             "server response decode error, incorrect byte length",
         ))?
     }
-    // remove SEPARATOR
-    match String::from_utf8(bytes[1..(bytes_len - 1)].to_vec()) {
+    match String::from_utf8(bytes[1..].to_vec()) {
         Ok(s) => Ok(s),
         Err(_) => Err(Error::msg("utf-8 decode error")),
     }

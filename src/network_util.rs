@@ -40,10 +40,13 @@ use futures::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, StreamExt};
 use std::fmt::{Debug, Formatter, Write};
 use std::io::ErrorKind;
 use std::net::Shutdown;
+use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::SeqCst;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
+use async_std::stream::Stream;
 
 const NET_CHANNEL_SIZE: usize = 20;
 
@@ -62,9 +65,13 @@ impl<Msg, Rsp> Conn<Msg, Rsp> {
     pub fn sender(&self) -> &Sender<Msg> {
         &self.sender
     }
+}
 
-    pub async fn next(&mut self) -> Option<Received<Rsp>> {
-        self.receiver.next().await
+impl<Msg, Rsp> Stream for Conn<Msg, Rsp> {
+    type Item = Received<Rsp>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.receiver.poll_next_unpin(cx)
     }
 }
 
@@ -389,8 +396,8 @@ impl<T> Debug for Received<T> {
 
 #[cfg(test)]
 mod test_network_module {
-    use crate::network::{handle_connection, Conn, ConnectionError, Received};
-    use crate::room::token::RoomToken;
+    use crate::network_util::{handle_connection, Conn, ConnectionError, Received};
+    use crate::lobby::token::RoomToken;
     use async_std::channel::{bounded, Receiver};
     use async_std::net::{TcpListener, TcpStream};
     use async_std::task;

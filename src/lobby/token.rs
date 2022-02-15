@@ -6,7 +6,7 @@ use unicode_segmentation::UnicodeSegmentation;
 const TOKEN_LENGTH: usize = 10;
 
 #[derive(Debug, PartialEq, Hash, Clone)]
-pub(crate) struct RoomToken(pub(crate) [u8; TOKEN_LENGTH]);
+pub struct RoomToken(pub(crate) [u8; TOKEN_LENGTH]);
 
 impl RoomToken {
     pub(crate) fn random<R: Rng>(rng: &mut R) -> Self {
