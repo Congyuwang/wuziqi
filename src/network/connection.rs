@@ -29,24 +29,20 @@
 //! - MaxDataLengthExceeded: data payload top long
 //! - DataCorrupted: checksum does not match
 //! - UnknownMessageType: message type byte does not match
-//!
-use anyhow::Result;
+use crate::network::utility;
 use async_std::channel::{bounded, Receiver, Sender};
 use async_std::io::BufReader;
 use async_std::net::TcpStream;
+use async_std::prelude::Stream;
 use async_std::task;
 use crc32fast::hash as checksum;
-use futures::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, StreamExt};
-use std::fmt::{Debug, Formatter, Write};
+use futures::{AsyncWriteExt, StreamExt};
+use std::fmt::{Debug, Formatter};
 use std::io::ErrorKind;
 use std::net::Shutdown;
 use std::pin::Pin;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering::SeqCst;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
-use async_std::stream::Stream;
 
 const NET_CHANNEL_SIZE: usize = 20;
 
@@ -246,24 +242,24 @@ async fn read_rsp<Rsp>(
 where
     Rsp: TryFrom<Vec<u8>> + 'static,
 {
-    let packet_type = match read_one_byte(reader).await {
+    let packet_type = match utility::read_one_byte(reader).await {
         None => return Ok(None),
         Some(pt) => pt,
     };
     match packet_type {
         DATA => {
-            let size = match read_be_u32(reader).await {
+            let size = match utility::read_be_u32(reader).await {
                 None => return Ok(None),
                 Some(s) => s,
             };
             if size > max_data_size {
                 Err(ConnectionError::MaxDataLengthExceeded)?
             }
-            let pay_load = match read_n_bytes(reader, size).await {
+            let pay_load = match utility::read_n_bytes(reader, size).await {
                 None => return Ok(None),
                 Some(s) => s,
             };
-            let check_sum = match read_be_u32(reader).await {
+            let check_sum = match utility::read_be_u32(reader).await {
                 None => return Ok(None),
                 Some(s) => s,
             };
@@ -277,7 +273,7 @@ where
             }
         }
         ERROR => {
-            let error_code = match read_one_byte(reader).await {
+            let error_code = match utility::read_one_byte(reader).await {
                 None => return Ok(None),
                 Some(s) => s,
             };
@@ -333,33 +329,6 @@ fn wrap_data_payload(payload: &[u8], max_data_len: u32) -> std::io::Result<Vec<u
     Ok(dat)
 }
 
-async fn read_n_bytes(reader: &mut BufReader<TcpStream>, n: u32) -> Option<Vec<u8>> {
-    let n = n as usize;
-    let mut pay_load = Vec::with_capacity(n);
-    for _ in 0..n {
-        pay_load.push(read_one_byte(reader).await?);
-    }
-    Some(pay_load)
-}
-
-async fn read_be_u32(reader: &mut BufReader<TcpStream>) -> Option<u32> {
-    let mut bytes = [0u8; 4];
-    if reader.read_exact(&mut bytes).await.is_err() {
-        None
-    } else {
-        Some(u32::from_be_bytes(bytes))
-    }
-}
-
-async fn read_one_byte(reader: &mut BufReader<TcpStream>) -> Option<u8> {
-    let mut packet_type = [0u8; 1];
-    if reader.read_exact(&mut packet_type).await.is_err() {
-        None
-    } else {
-        Some(packet_type[0])
-    }
-}
-
 impl ConnectionError {
     fn error_code(&self) -> u8 {
         match self {
@@ -396,8 +365,8 @@ impl<T> Debug for Received<T> {
 
 #[cfg(test)]
 mod test_network_module {
-    use crate::network_util::{handle_connection, Conn, ConnectionError, Received};
     use crate::lobby::token::RoomToken;
+    use crate::network::connection::{handle_connection, Conn, ConnectionError, Received};
     use async_std::channel::{bounded, Receiver};
     use async_std::net::{TcpListener, TcpStream};
     use async_std::task;
