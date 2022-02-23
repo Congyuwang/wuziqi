@@ -1,44 +1,44 @@
 use crate::game::game_field::{Color, State};
-use crate::game::session::messages::{PlayerAction, UndoAction};
-use anyhow::Result;
+use crate::game::session::messages::{
+    PlayerAction::{self, Play, Quit, RequestUndo, Undo},
+    UndoAction::{Approve, Reject},
+};
 use async_std::channel::{Receiver, Sender};
 
 /// Public API used for interacting with the game
-pub struct Player {
+pub struct Commands {
     listener: Option<Receiver<PlayerResponse>>,
     action_sender: Sender<PlayerAction>,
 }
 
 /// all player actions are here
-impl Player {
+impl Commands {
     /// play a certain step
-    pub async fn play(&self, x: u8, y: u8) -> Result<()> {
-        self.action_sender.send(PlayerAction::Play(x, y)).await?;
-        Ok(())
+    pub async fn play(&self, x: u8, y: u8) {
+        let _ = self.action_sender.send(Play(x, y)).await;
     }
 
-    pub async fn request_undo(&self) -> Result<()> {
-        self.action_sender.send(PlayerAction::RequestUndo).await?;
-        Ok(())
+    pub async fn request_undo(&self) {
+        let _ = self.action_sender.send(RequestUndo).await;
     }
 
-    pub async fn approve_undo(&self) -> Result<()> {
-        self.action_sender
-            .send(PlayerAction::Undo(UndoAction::Approve))
-            .await?;
-        Ok(())
+    pub async fn approve_undo(&self) {
+        let _ = self.action_sender.send(Undo(Approve)).await;
     }
 
-    pub async fn reject_undo(&self) -> Result<()> {
-        self.action_sender
-            .send(PlayerAction::Undo(UndoAction::Reject))
-            .await?;
-        Ok(())
+    pub async fn reject_undo(&self) {
+        let _ = self.action_sender.send(Undo(Reject)).await;
     }
 
-    pub async fn quit(&self, reason: PlayerQuitReason) -> Result<()> {
-        self.action_sender.send(PlayerAction::Quit(reason)).await?;
-        Ok(())
+    /// `quit()` should be called before ending the game to properly
+    /// notify the other player.
+    ///
+    /// Moreover, game session might stuck waiting for player message
+    /// if the corresponding player `Commands` is dropped without
+    /// calling `quit()` since game session wait for combined incoming
+    /// messages.
+    pub async fn quit(&self, reason: PlayerQuitReason) {
+        let _ = self.action_sender.send(Quit(reason)).await;
     }
 
     pub fn get_listener(&mut self) -> Option<Receiver<PlayerResponse>> {
@@ -48,8 +48,8 @@ impl Player {
     pub(crate) fn new(
         action_sender: Sender<PlayerAction>,
         listener: Receiver<PlayerResponse>,
-    ) -> Player {
-        Player {
+    ) -> Commands {
+        Commands {
             listener: Some(listener),
             action_sender,
         }
@@ -59,7 +59,8 @@ impl Player {
 /// the reason of player quit
 #[derive(Debug)]
 pub enum PlayerQuitReason {
-    Quit,
+    QuitSession,
+    ExitGame,
     Disconnected,
     Error(String),
 }
@@ -70,7 +71,9 @@ pub enum PlayerResponse {
     FieldUpdate(FieldState),
     UndoRequest,
     Undo(UndoResponse),
-    /// other player quit or game error
+    /// Other player quit or game error.
+    /// Game session will end automatically on
+    /// receiving Quit response
     Quit(GameQuitResponse),
 }
 
@@ -90,10 +93,17 @@ pub enum UndoResponse {
 /// reason of game session end
 #[derive(Clone, Debug)]
 pub enum GameQuitResponse {
+    /// broadcast to both players
     GameEnd(GameResult),
-    PlayerQuit(u64),
-    PlayerDisconnected(u64),
-    PlayerError(u64, String),
+    /// send to opponent
+    OpponentQuitSession(u64),
+    /// send to opponent
+    OpponentExitGame(u64),
+    /// send to opponent
+    OpponentDisconnected(u64),
+    /// send to opponent
+    OpponentError(u64, String),
+    /// broadcast to both players
     GameError(String),
 }
 
