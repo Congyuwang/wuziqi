@@ -3,17 +3,19 @@
 use crate::game::Color::{Black, White};
 use crate::game::{compress_field, decompress_field, Color, FieldState, FieldStateNullable};
 use crate::lobby::token::RoomToken;
-use crate::network_util::Conn;
 use anyhow::{Error, Result};
-use futures::TryFutureExt;
+use async_std::channel::Sender;
+use async_std::stream::Stream;
+use futures::{StreamExt, TryFutureExt};
+use std::ops::{Deref, DerefMut};
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use unroll::unroll_for_loops;
-use xactor::Actor;
 
-pub(crate) type ClientConnection = Conn<Responses, Messages>;
-
-// TODO: join random room
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) enum Messages {
+    /// send user name
+    UserName(String),
     /// create a new room
     CreateRoom,
     /// attempt to join a room with a RoomToken
@@ -46,6 +48,8 @@ pub(crate) enum Messages {
 
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) enum Responses {
+    /// Connection success
+    ConnectionSuccess,
     /// response to `CreateRoom`
     RoomCreated(String),
     /// response to `JoinRoom`
@@ -55,7 +59,8 @@ pub(crate) enum Responses {
     /// response to `JoinRoom`
     JoinRoomFailureRoomFull,
     /// when the other player gets `JoinRoomSuccess`
-    OpponentJoinRoom,
+    /// the `String` is the username
+    OpponentJoinRoom(String),
     /// when the other player `QuitRoom`
     OpponentQuitRoom,
     /// when the other player is `Ready`
@@ -113,6 +118,7 @@ impl Messages {
             Messages::QuitGameSession => 9,
             Messages::ExitGame => 10,
             Messages::ClientError(_) => 12,
+            Messages::UserName(_) => 100,
             Messages::ChatMessage(_) => 200,
         }
     }
@@ -138,6 +144,12 @@ impl Into<Vec<u8>> for Messages {
                 dat
             }
             Messages::Play(x, y) => [self.message_type(), x, y].to_vec(),
+            Messages::UserName(ref name) => {
+                let mut dat = Vec::new();
+                dat.push(self.message_type());
+                dat.extend(name.as_bytes());
+                dat
+            }
             Messages::ChatMessage(ref msg) => {
                 let mut dat = Vec::new();
                 dat.push(self.message_type());
@@ -180,6 +192,7 @@ impl TryFrom<Vec<u8>> for Messages {
             9 => Ok(Messages::QuitGameSession),
             10 => Ok(Messages::ExitGame),
             12 => Ok(Messages::ClientError(decode_utf8_string(&bytes)?)),
+            100 => Ok(Messages::UserName(decode_utf8_string(&bytes)?)),
             200 => Ok(Messages::ChatMessage(decode_utf8_string(&bytes)?)),
             _ => Err(Error::msg("client messages decode error")),
         }
@@ -193,7 +206,7 @@ impl Responses {
             Responses::JoinRoomSuccess => 1,
             Responses::JoinRoomFailureTokenNotFound => 2,
             Responses::JoinRoomFailureRoomFull => 3,
-            Responses::OpponentJoinRoom => 4,
+            Responses::OpponentJoinRoom(_) => 4,
             Responses::OpponentQuitRoom => 5,
             Responses::OpponentReady => 6,
             Responses::OpponentUnready => 7,
@@ -213,6 +226,7 @@ impl Responses {
             Responses::OpponentExitGame => 21,
             Responses::OpponentDisconnected => 22,
             Responses::GameSessionError(_) => 23,
+            Responses::ConnectionSuccess => 100,
             Responses::ChatMessage(_) => 200,
         }
     }
@@ -224,7 +238,6 @@ impl Into<Vec<u8>> for Responses {
             Responses::JoinRoomSuccess
             | Responses::JoinRoomFailureTokenNotFound
             | Responses::JoinRoomFailureRoomFull
-            | Responses::OpponentJoinRoom
             | Responses::OpponentQuitRoom
             | Responses::OpponentReady
             | Responses::OpponentUnready
@@ -239,6 +252,7 @@ impl Into<Vec<u8>> for Responses {
             | Responses::GameEndDraw
             | Responses::OpponentQuitGameSession
             | Responses::OpponentExitGame
+            | Responses::ConnectionSuccess
             | Responses::OpponentDisconnected => [self.response_type()].to_vec(),
             Responses::RoomCreated(token) => {
                 let mut dat = Vec::new();
@@ -292,6 +306,12 @@ impl Into<Vec<u8>> for Responses {
                 );
                 dat
             }
+            Responses::OpponentJoinRoom(name) => {
+                let mut dat = Vec::new();
+                dat.push(self.response_type());
+                dat.extend(name.as_bytes());
+                dat
+            }
             Responses::GameSessionError(e) => {
                 let mut dat = Vec::new();
                 dat.push(self.response_type());
@@ -318,7 +338,7 @@ impl TryFrom<Vec<u8>> for Responses {
             1 => Ok(Responses::JoinRoomSuccess),
             2 => Ok(Responses::JoinRoomFailureTokenNotFound),
             3 => Ok(Responses::JoinRoomFailureRoomFull),
-            4 => Ok(Responses::OpponentJoinRoom),
+            4 => Ok(Responses::OpponentJoinRoom(decode_utf8_string(&bytes)?)),
             5 => Ok(Responses::OpponentQuitRoom),
             6 => Ok(Responses::OpponentReady),
             7 => Ok(Responses::OpponentUnready),
@@ -334,6 +354,7 @@ impl TryFrom<Vec<u8>> for Responses {
             20 => Ok(Responses::OpponentQuitGameSession),
             21 => Ok(Responses::OpponentExitGame),
             22 => Ok(Responses::OpponentDisconnected),
+            100 => Ok(Responses::ConnectionSuccess),
             200 => Ok(Responses::ChatMessage(decode_utf8_string(&bytes)?)),
             8 => {
                 if bytes.len() != 2 {
@@ -475,6 +496,7 @@ mod test_encode_decode {
         assert_msg_eq(Messages::QuitGameSession);
         assert_msg_eq(Messages::ExitGame);
         assert_msg_eq(Messages::ClientError("decode error".to_string()));
+        assert_msg_eq(Messages::UserName("user name".to_string()));
         assert_msg_eq(Messages::ChatMessage("chat message".to_string()));
     }
 
@@ -484,10 +506,11 @@ mod test_encode_decode {
         assert_rsp_eq(Responses::RoomCreated(
             RoomToken::random(&mut rng).as_code().unwrap(),
         ));
+        assert_rsp_eq(Responses::ConnectionSuccess);
         assert_rsp_eq(Responses::JoinRoomSuccess);
         assert_rsp_eq(Responses::JoinRoomFailureTokenNotFound);
         assert_rsp_eq(Responses::JoinRoomFailureRoomFull);
-        assert_rsp_eq(Responses::OpponentJoinRoom);
+        assert_rsp_eq(Responses::OpponentJoinRoom("some username".to_string()));
         assert_rsp_eq(Responses::OpponentQuitRoom);
         assert_rsp_eq(Responses::OpponentReady);
         assert_rsp_eq(Responses::OpponentUnready);
