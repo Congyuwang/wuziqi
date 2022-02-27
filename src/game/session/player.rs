@@ -7,7 +7,7 @@ use crate::game::session::{
     FieldState, GameQuitResponse, PlayerQuitReason, PlayerResponse, SessionConfig, UndoResponse,
 };
 use crate::game::Color::Black;
-use crate::CHANNEL_SIZE;
+use crate::{State, CHANNEL_SIZE};
 use anyhow::Result;
 use async_std::channel::{bounded, Receiver, Sender};
 use async_std::task;
@@ -127,15 +127,16 @@ async fn handle_session_message(
 
 /// play when is_my_turn, not_my_turn after play
 ///
-/// ignore out of bound positions
+/// ignore out of bound positions, (ignore also playing non-empty position)
 async fn on_player_play(x: u8, y: u8, player_state: &mut PlayerState) -> Result<()> {
-    if player_state.undo_dialogue.is_none() && player_state.my_turn.is_some() {
-        if x < 15 && y < 15 {
-            let timeout_sender = player_state.my_turn.take().unwrap();
-            timeout_sender
-                .send(Response::Session(SessionPlayerAction::Play(x, y)))
-                .await?;
-        }
+    if player_state.undo_dialogue.is_none()
+        && player_state.my_turn.is_some()
+        && player_state.is_valid_step(x, y)
+    {
+        let timeout_sender = player_state.my_turn.take().unwrap();
+        timeout_sender
+            .send(Response::Session(SessionPlayerAction::Play(x, y)))
+            .await?;
     }
     Ok(())
 }
@@ -217,6 +218,7 @@ async fn on_field_update(
         player_state.now_my_turn();
         player_state.allow_undo = false;
     }
+    player_state.update_field(field_state.field.clone());
     // forward field state
     responses
         .send(Response::Player(PlayerResponse::FieldUpdate(field_state)))
@@ -256,6 +258,7 @@ async fn on_undo_response(
     // close undo dialogue once received undo responses from game session
     match &undo_rsp {
         UndoResponse::Undo(f) => {
+            player_state.update_field(f.field.clone());
             match &f.latest {
                 // if undid the first step
                 None => {
@@ -361,6 +364,7 @@ struct PlayerState {
     my_turn: Option<TimeoutGate<Response>>,
     allow_undo: bool,
     undo_dialogue: Option<UndoDialogue>,
+    latest_field: [[State; 15]; 15],
 }
 
 impl PlayerState {
@@ -371,12 +375,17 @@ impl PlayerState {
             my_turn: None,
             allow_undo: false,
             undo_dialogue: None,
+            latest_field: [[State::E; 15]; 15],
         };
         // black first
         if let Color::Black = my_color {
             PlayerState::now_my_turn(&mut new_state)
         }
         new_state
+    }
+
+    fn update_field(&mut self, field: [[State; 15]; 15]) {
+        self.latest_field = field;
     }
 
     /// start the timeout immediately, called before calling play
@@ -392,6 +401,14 @@ impl PlayerState {
             Response::Session(SessionPlayerAction::PlayTimeout),
         ));
         self.allow_undo = false;
+    }
+
+    fn is_valid_step(&self, x: u8, y: u8) -> bool {
+        if x < 15 && y < 15 {
+            matches!(self.latest_field[x as usize][y as usize], State::E)
+        } else {
+            false
+        }
     }
 
     async fn pause_my_turn_timer(&mut self) {

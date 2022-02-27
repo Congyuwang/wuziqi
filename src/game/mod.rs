@@ -40,22 +40,6 @@ mod test_game {
     }
 
     #[test]
-    fn test_play_on_occupied_error() {
-        let config = SessionConfig::default();
-        let (mut black, mut white) = new_session(1000, 100, 200, config);
-        let rsp_b = responses_future(Black, black.get_listener().unwrap());
-        let rsp_w = responses_future(White, white.get_listener().unwrap());
-        let actions = task::spawn(async move {
-            play_and_wait(&black, 5, 5).await;
-            play_and_wait(&white, 5, 6).await;
-            play_and_wait(&black, 6, 6).await;
-            // this should result in error response and end game
-            play_and_wait(&white, 5, 5).await;
-        });
-        block_on(join3(rsp_b, rsp_w, actions));
-    }
-
-    #[test]
     fn test_white_wins() {
         let config = SessionConfig::default();
         let (mut black, mut white) = new_session(1000, 100, 200, config);

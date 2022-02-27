@@ -118,10 +118,7 @@ impl RoomInner {
                 )
                 .await;
             let _ = self
-                .send_response(
-                    pos.opponent(),
-                    Responses::OpponentJoinRoom(my_name),
-                )
+                .send_response(pos.opponent(), Responses::OpponentJoinRoom(my_name))
                 .await;
             Ok(pos)
         } else {
