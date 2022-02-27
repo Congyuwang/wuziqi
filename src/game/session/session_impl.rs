@@ -2,7 +2,7 @@ use crate::game::game_field::Color::{self, Black, White};
 use crate::game::game_field::{new_field, GameCommand, GameResponse};
 use crate::game::session::api::SessionConfig;
 use crate::game::session::api::{
-    GameQuitResponse, GameResult, Player, PlayerQuitReason, UndoResponse,
+    Commands, GameQuitResponse, GameResult, PlayerQuitReason, UndoResponse,
 };
 use crate::game::session::messages::{
     broadcast_to_players, message_receiver, message_sender, SessionKiller, SessionMessage,
@@ -13,7 +13,9 @@ use anyhow::Result;
 use async_std::channel::Sender;
 use async_std::task;
 use futures::StreamExt;
-use log::{error, info, trace, warn};
+#[allow(unused_imports)]
+use log::trace;
+use log::{error, info, warn};
 
 /// start a new game session
 pub fn new_session(
@@ -21,7 +23,7 @@ pub fn new_session(
     black_player_id: u64,
     white_player_id: u64,
     session_config: SessionConfig,
-) -> (Player, Player) {
+) -> (Commands, Commands) {
     info!(
         "game session {} launched with black player {} and white player {}",
         session_id, black_player_id, white_player_id
@@ -65,7 +67,7 @@ pub fn new_session(
             {
                 #[cfg(debug_assertions)]
                 trace!(
-                    "session thread of game {} and player {} and {} stopped on err",
+                    "session thread of game {} and player {} and {} stopped",
                     session_id,
                     black_player_id,
                     white_player_id
@@ -82,8 +84,8 @@ pub fn new_session(
         )
     });
     (
-        Player::new(black_player.0, black_player.1),
-        Player::new(white_player.0, white_player.1),
+        Commands::new(black_player.0, black_player.1),
+        Commands::new(white_player.0, white_player.1),
     )
 }
 
@@ -236,9 +238,10 @@ async fn on_player_quit(
 ) -> Result<()> {
     // the reason for player's quit action
     let quit_rsp = match quit_action {
-        PlayerQuitReason::Quit => GameQuitResponse::PlayerQuit(player_id),
-        PlayerQuitReason::Disconnected => GameQuitResponse::PlayerDisconnected(player_id),
-        PlayerQuitReason::Error(e) => GameQuitResponse::PlayerError(player_id, e),
+        PlayerQuitReason::QuitSession => GameQuitResponse::OpponentQuitSession(player_id),
+        PlayerQuitReason::Disconnected => GameQuitResponse::OpponentDisconnected(player_id),
+        PlayerQuitReason::Error(e) => GameQuitResponse::OpponentError(player_id, e),
+        PlayerQuitReason::ExitGame => GameQuitResponse::OpponentExitGame(player_id),
     };
     // notify the other player
     responses
@@ -260,13 +263,16 @@ fn log_quit_response(game_id: u64, quit_rsp: GameQuitResponse) {
         GameQuitResponse::GameEnd(e) => {
             error!("game {} finished in error {}", game_id, e)
         }
-        GameQuitResponse::PlayerQuit(player_id) => {
+        GameQuitResponse::OpponentQuitSession(player_id) => {
             info!("player {} quit game {}", player_id, game_id)
         }
-        GameQuitResponse::PlayerDisconnected(player_id) => {
+        GameQuitResponse::OpponentExitGame(player_id) => {
+            info!("player {} exit game {}", player_id, game_id)
+        }
+        GameQuitResponse::OpponentDisconnected(player_id) => {
             warn!("player {} disconnected from game {}", player_id, game_id)
         }
-        GameQuitResponse::PlayerError(player_id, e) => error!(
+        GameQuitResponse::OpponentError(player_id, e) => error!(
             "player {} error in game {}. Error: {}",
             player_id, game_id, e
         ),

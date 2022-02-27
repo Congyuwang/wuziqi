@@ -37,7 +37,7 @@ use async_std::prelude::Stream;
 use async_std::task;
 use crc32fast::hash as checksum;
 use futures::{AsyncWriteExt, StreamExt};
-use std::fmt::{Debug, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::io::ErrorKind;
 use std::net::Shutdown;
 use std::pin::Pin;
@@ -83,7 +83,7 @@ pub enum Received<T> {
     RemoteError(ConnectionError),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ConnectionError {
     /// Attempting to send or receive over-sized data payload
     MaxDataLengthExceeded,
@@ -95,6 +95,18 @@ pub enum ConnectionError {
     DecodeError,
     /// Cannot decode error message
     UnknownError,
+}
+
+impl Display for ConnectionError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConnectionError::MaxDataLengthExceeded => f.write_str("max data length exceeded"),
+            ConnectionError::UnknownMessageType => f.write_str("unknown message type"),
+            ConnectionError::DataCorrupted => f.write_str("data corrupted"),
+            ConnectionError::DecodeError => f.write_str("decode error"),
+            ConnectionError::UnknownError => f.write_str("unknown error"),
+        }
+    }
 }
 
 pub fn handle_connection<Msg, Rsp>(
@@ -193,11 +205,10 @@ where
             if let Err(e) = write_result {
                 match e.kind() {
                     ErrorKind::InvalidData => {}
-                    ErrorKind::WriteZero => {
+                    _ => {
                         let _ = tcp.shutdown(Shutdown::Both);
                         return;
                     }
-                    _ => unreachable!(),
                 }
             }
         }
@@ -352,10 +363,13 @@ impl ConnectionError {
     }
 }
 
-impl<T> Debug for Received<T> {
+impl<T> Debug for Received<T>
+where
+    T: Debug,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Received::Response(_) => f.write_str("Responses::Response"),
+            Received::Response(rsp) => f.write_str(&format!("Responses::Response({:?})", rsp)),
             Received::Ping => f.write_str("Responses::Ping"),
             Received::Error(_) => f.write_str("Responses::Error"),
             Received::RemoteError(_) => f.write_str("Responses::RemoteError"),
@@ -365,7 +379,6 @@ impl<T> Debug for Received<T> {
 
 #[cfg(test)]
 mod test_network_module {
-    use crate::lobby::token::RoomToken;
     use crate::network::connection::{handle_connection, Conn, ConnectionError, Received};
     use async_std::channel::{bounded, Receiver};
     use async_std::net::{TcpListener, TcpStream};
@@ -373,7 +386,7 @@ mod test_network_module {
     use futures::executor::block_on;
     use futures::StreamExt;
     use rand::random;
-    use std::net::{Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4};
+    use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
     use std::ops::Deref;
     use std::sync::Arc;
     use std::time::Duration;

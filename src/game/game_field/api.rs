@@ -6,7 +6,9 @@ use anyhow::{Error, Result};
 use async_std::channel::{bounded, Receiver, Sender};
 use async_std::task;
 use futures::StreamExt;
-use log::{error, trace};
+use log::error;
+#[allow(unused_imports)]
+use log::trace;
 use std::collections::VecDeque;
 
 #[derive(Debug)]
@@ -69,7 +71,8 @@ async fn execute_command(
 ) -> Result<()> {
     match command {
         GameCommand::Do { x, y, color } => {
-            do_play(game_id, field, x, y, color, history, response).await
+            let _ = do_play(game_id, field, x, y, color, history, response).await;
+            Ok(())
         }
         GameCommand::Undo => undo_play(game_id, field, history, response).await,
         GameCommand::Kill => Err(Error::msg("game killed")),

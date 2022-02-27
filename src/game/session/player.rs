@@ -12,12 +12,13 @@ use anyhow::Result;
 use async_std::channel::{bounded, Receiver, Sender};
 use async_std::task;
 use futures::{stream_select, StreamExt};
+#[allow(unused_imports)]
 use log::trace;
 use std::fmt::{Debug, Formatter};
 use std::time::Duration;
 
 pub(crate) fn new_session_player(
-    player_id: u64,
+    #[allow(unused_variables)] player_id: u64,
     my_color: Color,
     config: SessionConfig,
 ) -> (

@@ -1,23 +1,21 @@
 //! Implementation principles.
 //! - disconnection without clear exit signal is considered as disconnection.
 use crate::game::Color::{Black, White};
-use crate::game::{compress_field, decompress_field, Color, FieldState, FieldStateNullable};
+use crate::game::{
+    compress_field, decompress_field, Color, FieldState, FieldStateNullable, SessionConfig,
+};
+use crate::lobby::client_connection::ConnectionInitError;
 use crate::lobby::token::RoomToken;
+use crate::network::connection::ConnectionError;
 use anyhow::{Error, Result};
-use async_std::channel::Sender;
-use async_std::stream::Stream;
-use futures::{StreamExt, TryFutureExt};
-use std::ops::{Deref, DerefMut};
-use std::pin::Pin;
-use std::task::{Context, Poll};
 use unroll::unroll_for_loops;
 
 #[derive(Clone, PartialEq, Debug)]
-pub(crate) enum Messages {
+pub enum Messages {
     /// send user name
     UserName(String),
     /// create a new room
-    CreateRoom,
+    CreateRoom(SessionConfig),
     /// attempt to join a room with a RoomToken
     JoinRoom(RoomToken),
     /// Quit a room
@@ -47,13 +45,24 @@ pub(crate) enum Messages {
 }
 
 #[derive(Clone, PartialEq, Debug)]
-pub(crate) enum Responses {
+pub enum RoomState {
+    Empty,
+    OpponentReady(String),
+    OpponentUnready(String),
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub enum Responses {
     /// Connection success
     ConnectionSuccess,
+    /// Connection Init Error
+    ConnectionInitFailure(ConnectionInitError),
     /// response to `CreateRoom`
     RoomCreated(String),
     /// response to `JoinRoom`
-    JoinRoomSuccess,
+    /// the two fields are correspondingly
+    /// `room` token
+    JoinRoomSuccess(String, RoomState),
     /// response to `JoinRoom`
     JoinRoomFailureTokenNotFound,
     /// response to `JoinRoom`
@@ -91,6 +100,8 @@ pub(crate) enum Responses {
     GameEndWhiteWins,
     /// game session ends, draw
     GameEndDraw,
+    /// Room score information (player1, player2)
+    RoomScores((String, u16), (String, u16)),
     /// opponent quit game session
     OpponentQuitGameSession,
     /// opponent exit game
@@ -99,14 +110,14 @@ pub(crate) enum Responses {
     OpponentDisconnected,
     /// game session ends in error
     GameSessionError(String),
-    /// ChatMessage
-    ChatMessage(String),
+    /// ChatMessage: (user_name, message)
+    ChatMessage(String, String),
 }
 
 impl Messages {
     fn message_type(&self) -> u8 {
         match &self {
-            Messages::CreateRoom => 0,
+            Messages::CreateRoom(_) => 0,
             Messages::JoinRoom(_) => 1,
             Messages::QuitRoom => 2,
             Messages::Ready => 3,
@@ -127,8 +138,7 @@ impl Messages {
 impl Into<Vec<u8>> for Messages {
     fn into(self) -> Vec<u8> {
         match self {
-            Messages::CreateRoom
-            | Messages::QuitRoom
+            Messages::QuitRoom
             | Messages::Ready
             | Messages::Unready
             | Messages::RequestUndo
@@ -136,8 +146,16 @@ impl Into<Vec<u8>> for Messages {
             | Messages::RejectUndo
             | Messages::QuitGameSession
             | Messages::ExitGame => [self.message_type()].to_vec(),
+            Messages::CreateRoom(ref conf) => {
+                let mut dat = Vec::with_capacity(25);
+                dat.push(self.message_type());
+                dat.extend(conf.undo_request_timeout.to_be_bytes());
+                dat.extend(conf.undo_dialogue_extra_seconds.to_be_bytes());
+                dat.extend(conf.play_timeout.to_be_bytes());
+                dat
+            }
             Messages::JoinRoom(ref token) => {
-                let token_string = token.as_code().unwrap();
+                let token_string = token.as_code();
                 let mut dat = Vec::new();
                 dat.push(self.message_type());
                 dat.extend(token_string.as_bytes());
@@ -170,7 +188,20 @@ impl TryFrom<Vec<u8>> for Messages {
 
     fn try_from(bytes: Vec<u8>) -> Result<Self> {
         match bytes[0] {
-            0 => Ok(Messages::CreateRoom),
+            0 => {
+                if bytes.len() != 25 {
+                    Err(Error::msg(
+                        "client message decode error, incorrect byte length",
+                    ))?
+                }
+                Ok(Messages::CreateRoom(SessionConfig {
+                    undo_request_timeout: u64::from_be_bytes((&bytes[1..9]).try_into().unwrap()),
+                    undo_dialogue_extra_seconds: u64::from_be_bytes(
+                        (&bytes[9..17]).try_into().unwrap(),
+                    ),
+                    play_timeout: u64::from_be_bytes((&bytes[17..25]).try_into().unwrap()),
+                }))
+            }
             1 => {
                 let token = decode_utf8_string(&bytes)?;
                 Ok(Messages::JoinRoom(RoomToken::from_code(&token)?))
@@ -203,7 +234,7 @@ impl Responses {
     fn response_type(&self) -> u8 {
         match &self {
             Responses::RoomCreated(_) => 0,
-            Responses::JoinRoomSuccess => 1,
+            Responses::JoinRoomSuccess(_, _) => 1,
             Responses::JoinRoomFailureTokenNotFound => 2,
             Responses::JoinRoomFailureRoomFull => 3,
             Responses::OpponentJoinRoom(_) => 4,
@@ -226,8 +257,10 @@ impl Responses {
             Responses::OpponentExitGame => 21,
             Responses::OpponentDisconnected => 22,
             Responses::GameSessionError(_) => 23,
+            Responses::RoomScores(_, _) => 24,
             Responses::ConnectionSuccess => 100,
-            Responses::ChatMessage(_) => 200,
+            Responses::ConnectionInitFailure(_) => 110,
+            Responses::ChatMessage(_, _) => 200,
         }
     }
 }
@@ -235,8 +268,7 @@ impl Responses {
 impl Into<Vec<u8>> for Responses {
     fn into(self) -> Vec<u8> {
         match &self {
-            Responses::JoinRoomSuccess
-            | Responses::JoinRoomFailureTokenNotFound
+            Responses::JoinRoomFailureTokenNotFound
             | Responses::JoinRoomFailureRoomFull
             | Responses::OpponentQuitRoom
             | Responses::OpponentReady
@@ -254,6 +286,39 @@ impl Into<Vec<u8>> for Responses {
             | Responses::OpponentExitGame
             | Responses::ConnectionSuccess
             | Responses::OpponentDisconnected => [self.response_type()].to_vec(),
+            Responses::ConnectionInitFailure(e) => {
+                let mut dat = Vec::with_capacity(2);
+                dat.push(self.response_type());
+                dat.push(match e {
+                    ConnectionInitError::IpMaxConnExceed => 1,
+                    ConnectionInitError::ConnectionClosed => 2,
+                    ConnectionInitError::UserNameNotReceived => 3,
+                    ConnectionInitError::UserNameTooLong => 4,
+                    ConnectionInitError::UserNameExists => 5,
+                    ConnectionInitError::InvalidUserName => 6,
+                    ConnectionInitError::NetworkError(_) => 7,
+                });
+                dat
+            }
+            Responses::JoinRoomSuccess(token, room_state) => {
+                let mut dat = Vec::new();
+                dat.push(self.response_type());
+                let token_bytes = token.as_bytes();
+                dat.extend((token_bytes.len() as u16).to_be_bytes());
+                dat.extend(token.as_bytes());
+                match room_state {
+                    RoomState::Empty => dat.push(0),
+                    RoomState::OpponentUnready(name) => {
+                        dat.push(1);
+                        dat.extend(name.as_bytes());
+                    }
+                    RoomState::OpponentReady(name) => {
+                        dat.push(2);
+                        dat.extend(name.as_bytes());
+                    }
+                }
+                dat
+            }
             Responses::RoomCreated(token) => {
                 let mut dat = Vec::new();
                 dat.push(self.response_type());
@@ -318,10 +383,23 @@ impl Into<Vec<u8>> for Responses {
                 dat.extend(e.as_bytes());
                 dat
             }
-            Responses::ChatMessage(msg) => {
+            Responses::ChatMessage(name, msg) => {
                 let mut dat = Vec::new();
                 dat.push(self.response_type());
+                dat.extend((name.len() as u16).to_be_bytes());
+                dat.extend(name.as_bytes());
                 dat.extend(msg.as_bytes());
+                dat
+            }
+            Responses::RoomScores((p0_name, p0), (p1_name, p1)) => {
+                let mut dat = Vec::new();
+                dat.push(self.response_type());
+                dat.extend((p0_name.len() as u16).to_be_bytes());
+                dat.extend(p0_name.as_bytes());
+                dat.extend(p0.to_be_bytes());
+                dat.extend((p1_name.len() as u16).to_be_bytes());
+                dat.extend(p1_name.as_bytes());
+                dat.extend(p1.to_be_bytes());
                 dat
             }
         }
@@ -335,7 +413,6 @@ impl TryFrom<Vec<u8>> for Responses {
     fn try_from(bytes: Vec<u8>) -> Result<Self> {
         match bytes[0] {
             0 => Ok(Responses::RoomCreated(decode_utf8_string(&bytes)?)),
-            1 => Ok(Responses::JoinRoomSuccess),
             2 => Ok(Responses::JoinRoomFailureTokenNotFound),
             3 => Ok(Responses::JoinRoomFailureRoomFull),
             4 => Ok(Responses::OpponentJoinRoom(decode_utf8_string(&bytes)?)),
@@ -355,7 +432,59 @@ impl TryFrom<Vec<u8>> for Responses {
             21 => Ok(Responses::OpponentExitGame),
             22 => Ok(Responses::OpponentDisconnected),
             100 => Ok(Responses::ConnectionSuccess),
-            200 => Ok(Responses::ChatMessage(decode_utf8_string(&bytes)?)),
+            1 => {
+                if bytes.len() < 3 {
+                    Err(Error::msg(
+                        "server response decode error, incorrect byte length",
+                    ))?
+                }
+                let token_len = u16::from_be_bytes([bytes[1], bytes[2]]) as usize;
+                if bytes.len() < 3 + token_len + 1 {
+                    Err(Error::msg(
+                        "server response decode error, incorrect byte length",
+                    ))?
+                }
+                let token = String::from_utf8(bytes[3..3 + token_len].to_vec())
+                    .map_err(|_| Error::msg("utf-8 decode error"))?;
+                match bytes[3 + token_len] {
+                    0 => Ok(Responses::JoinRoomSuccess(token, RoomState::Empty)),
+                    1 => Ok(Responses::JoinRoomSuccess(
+                        token,
+                        RoomState::OpponentUnready(
+                            String::from_utf8(bytes[4 + token_len..].to_vec())
+                                .map_err(|_| Error::msg("utf-8 decode error"))?,
+                        ),
+                    )),
+                    2 => Ok(Responses::JoinRoomSuccess(
+                        token,
+                        RoomState::OpponentReady(
+                            String::from_utf8(bytes[4 + token_len..].to_vec())
+                                .map_err(|_| Error::msg("utf-8 decode error"))?,
+                        ),
+                    )),
+                    _ => Err(Error::msg("unknown room state")),
+                }
+            }
+            110 => {
+                if bytes.len() != 2 {
+                    Err(Error::msg(
+                        "server response decode error, incorrect byte length",
+                    ))?
+                }
+                Ok(Responses::ConnectionInitFailure(match bytes[1] {
+                    1 => ConnectionInitError::IpMaxConnExceed,
+                    2 => ConnectionInitError::ConnectionClosed,
+                    3 => ConnectionInitError::UserNameNotReceived,
+                    4 => ConnectionInitError::UserNameTooLong,
+                    5 => ConnectionInitError::UserNameExists,
+                    6 => ConnectionInitError::InvalidUserName,
+                    _ => ConnectionInitError::NetworkError(ConnectionError::UnknownError),
+                }))
+            }
+            200 => {
+                let (name, msg) = decode_chat_message(&bytes)?;
+                Ok(Responses::ChatMessage(name, msg))
+            }
             8 => {
                 if bytes.len() != 2 {
                     Err(Error::msg(
@@ -444,9 +573,54 @@ impl TryFrom<Vec<u8>> for Responses {
                 let error_message = decode_utf8_string(&bytes)?;
                 Ok(Responses::GameSessionError(error_message))
             }
+            24 => {
+                let (p0, p1) = decode_scores(&bytes)?;
+                Ok(Responses::RoomScores(p0, p1))
+            }
             _ => Err(Error::msg("server response decode error")),
         }
     }
+}
+
+fn decode_chat_message(bytes: &[u8]) -> Result<(String, String)> {
+    if bytes.len() < 3 {
+        return Err(Error::msg("incorrect byte length"));
+    }
+    let name_len = u16::from_be_bytes([bytes[1], bytes[2]]) as usize;
+    if bytes.len() < 3 + name_len {
+        return Err(Error::msg("incorrect byte length"));
+    }
+    let name = String::from_utf8(bytes[3..(3 + name_len)].to_vec())
+        .map_err(|_| Error::msg("utf-8 decode error"))?;
+    let chat_message = String::from_utf8(bytes[(3 + name_len)..].to_vec())
+        .map_err(|_| Error::msg("utf-8 decode error"))?;
+    Ok((name, chat_message))
+}
+
+// This function will take care of the first message type byte
+fn decode_scores(bytes: &[u8]) -> Result<((String, u16), (String, u16))> {
+    if bytes.len() < 3 {
+        return Err(Error::msg("incorrect byte length"));
+    }
+    let p0_name_len = u16::from_be_bytes([bytes[1], bytes[2]]) as usize;
+    if bytes.len() < 7 + p0_name_len {
+        return Err(Error::msg("incorrect byte length"));
+    }
+    let p0_name = String::from_utf8(bytes[3..(3 + p0_name_len)].to_vec())
+        .map_err(|_| Error::msg("utf-8 decode error"))?;
+    let p0_score = u16::from_be_bytes([bytes[3 + p0_name_len], bytes[4 + p0_name_len]]);
+    let p1_name_len = u16::from_be_bytes([bytes[5 + p0_name_len], bytes[6 + p0_name_len]]) as usize;
+    if bytes.len() < 9 + p0_name_len + p1_name_len {
+        return Err(Error::msg("incorrect byte length"));
+    }
+    let p1_name =
+        String::from_utf8(bytes[(7 + p0_name_len)..(7 + p0_name_len + p1_name_len)].to_vec())
+            .map_err(|_| Error::msg("utf-8 decode error"))?;
+    let p1_score = u16::from_be_bytes([
+        bytes[7 + p0_name_len + p1_name_len],
+        bytes[8 + p0_name_len + p1_name_len],
+    ]);
+    Ok(((p0_name, p0_score), (p1_name, p1_score)))
 }
 
 /// This function will take care of the first message type byte
@@ -457,10 +631,7 @@ fn decode_utf8_string(bytes: &[u8]) -> Result<String> {
             "server response decode error, incorrect byte length",
         ))?
     }
-    match String::from_utf8(bytes[1..].to_vec()) {
-        Ok(s) => Ok(s),
-        Err(_) => Err(Error::msg("utf-8 decode error")),
-    }
+    String::from_utf8(bytes[1..].to_vec()).map_err(|_| Error::msg("utf-8 decode error"))
 }
 
 #[cfg(test)]
@@ -484,7 +655,11 @@ mod test_encode_decode {
     #[test]
     fn test_messages() {
         let mut rng = thread_rng();
-        assert_msg_eq(Messages::CreateRoom);
+        assert_msg_eq(Messages::CreateRoom(SessionConfig {
+            undo_request_timeout: 1,
+            undo_dialogue_extra_seconds: 2,
+            play_timeout: 3,
+        }));
         assert_msg_eq(Messages::JoinRoom(RoomToken::random(&mut rng)));
         assert_msg_eq(Messages::QuitRoom);
         assert_msg_eq(Messages::Ready);
@@ -504,10 +679,13 @@ mod test_encode_decode {
     fn test_responses() {
         let mut rng = thread_rng();
         assert_rsp_eq(Responses::RoomCreated(
-            RoomToken::random(&mut rng).as_code().unwrap(),
+            RoomToken::random(&mut rng).as_code(),
         ));
         assert_rsp_eq(Responses::ConnectionSuccess);
-        assert_rsp_eq(Responses::JoinRoomSuccess);
+        assert_rsp_eq(Responses::JoinRoomSuccess(
+            RoomToken::random(&mut rng).as_code(),
+            RoomState::OpponentReady("枫原万叶".to_string()),
+        ));
         assert_rsp_eq(Responses::JoinRoomFailureTokenNotFound);
         assert_rsp_eq(Responses::JoinRoomFailureRoomFull);
         assert_rsp_eq(Responses::OpponentJoinRoom("some username".to_string()));
@@ -539,7 +717,17 @@ mod test_encode_decode {
         assert_rsp_eq(Responses::OpponentQuitGameSession);
         assert_rsp_eq(Responses::OpponentExitGame);
         assert_rsp_eq(Responses::OpponentDisconnected);
-        assert_rsp_eq(Responses::ChatMessage("chat message".to_string()));
+        assert_rsp_eq(Responses::RoomScores(
+            ("枫原万叶".to_string(), 5),
+            ("巴巴托斯".to_string(), 3),
+        ));
+        assert_rsp_eq(Responses::ChatMessage(
+            "神里绫华".to_string(),
+            "hi!".to_string(),
+        ));
         assert_rsp_eq(Responses::GameSessionError("some error".to_string()));
+        assert_rsp_eq(Responses::ConnectionInitFailure(
+            ConnectionInitError::UserNameTooLong,
+        ));
     }
 }

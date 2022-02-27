@@ -1,12 +1,7 @@
-use async_std::channel::{bounded, Receiver};
-use async_std::sync::{Mutex, MutexGuard};
-use async_std::task;
-use futures::channel::oneshot;
-use futures::channel::oneshot::Canceled;
-use futures::stream::{Fuse, FusedStream, Stream};
-use futures::{pin_mut, select, FutureExt, StreamExt};
+use async_std::sync::Mutex;
+use futures::stream::{FusedStream, Stream};
+use futures::{pin_mut, StreamExt};
 use std::future::Future;
-use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::SeqCst;
@@ -68,7 +63,7 @@ impl<F, R> Plug<F>
 where
     F: Stream<Item = R>,
 {
-    pub fn new(mut inner: F) -> (Self, UnplugHandle<F>) {
+    pub fn new(inner: F) -> (Self, UnplugHandle<F>) {
         let inner = Arc::new(PlugInner {
             stream_terminated: AtomicBool::new(false),
             stream: Mutex::new(Some(inner)),
@@ -89,7 +84,7 @@ where
 {
     type Item = R;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match self.inner.stream.try_lock() {
             None => {
                 // cannot lock only in the case of `unplug()` being called,
@@ -142,7 +137,7 @@ where
         match self.inner.stream.try_lock() {
             // unplugging
             None => true,
-            Some(mut stream) => {
+            Some(stream) => {
                 match stream.as_ref() {
                     // unplugged
                     None => true,
@@ -173,7 +168,7 @@ mod test_stoppable {
     use async_std::channel::bounded;
     use async_std::task;
     use futures::executor::block_on;
-    use futures::stream::{FusedStream, Stream};
+    use futures::stream::FusedStream;
     use futures::StreamExt;
 
     #[test]

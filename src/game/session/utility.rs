@@ -1,8 +1,7 @@
 use anyhow::Result;
-use async_std::channel::{bounded, SendError, Sender};
+use async_std::channel::{SendError, Sender};
 use async_std::sync::Mutex;
 use async_std::task;
-use futures::StreamExt;
 use std::borrow::BorrowMut;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
@@ -139,7 +138,9 @@ impl<T: Send + 'static> TimeoutGate<T> {
 #[cfg(test)]
 mod test_timeout {
     use super::*;
+    use async_std::channel::bounded;
     use futures::executor::block_on;
+    use futures::StreamExt;
 
     #[test]
     fn send_timeout() {

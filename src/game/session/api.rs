@@ -136,7 +136,7 @@ pub struct FieldStateNullable {
 /// client time should be shorter
 ///
 /// 0 means no timeout
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct SessionConfig {
     pub undo_request_timeout: u64,
     pub undo_dialogue_extra_seconds: u64,

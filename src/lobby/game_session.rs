@@ -1,65 +1,77 @@
+use crate::game::Color::{Black, White};
 use crate::game::{
-    new_session, Commands, GameQuitResponse, GameResult, PlayerQuitReason, PlayerResponse,
+    new_session, Color, Commands, GameQuitResponse, GameResult, PlayerQuitReason, PlayerResponse,
     SessionConfig, UndoResponse,
 };
-use crate::lobby::messages::{ClientConnection, Messages, Responses};
-use crate::lobby::token::RoomToken;
-use crate::network_util::{ConnectionError, Received};
+use crate::lobby::client_connection::ClientConnection;
+use crate::lobby::messages::{Messages, Responses};
+use crate::stream_utility::Plug;
 use crate::CHANNEL_SIZE;
 use async_std::channel::{bounded, Receiver, Sender};
 use async_std::task;
 use async_std::task::JoinHandle;
 use futures::{select, StreamExt};
-use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
-use futures::future::join;
-use crate::stream_utility::{Next, Pause};
+use std::fmt::{Display, Formatter};
 
-fn start_game_session(
+pub(crate) enum ExitState {
+    ReturnRoom(ClientConnection, PlayerResult),
+    ExitGame,
+}
+
+pub(crate) enum PlayerResult {
+    Win,
+    Lose,
+    Draw,
+    Quit,
+    OpponentQuit,
+}
+
+pub(crate) async fn start_game_session(
     session_id: u64,
     black_player_id: u64,
     white_player_id: u64,
     session_config: SessionConfig,
     black_player: ClientConnection,
     white_player: ClientConnection,
-) -> (JoinHandle<ExitState>, JoinHandle<ExitState>)
-{
+) -> (ExitState, ExitState) {
     let (black_cmd, white_cmd) =
         new_session(session_id, black_player_id, white_player_id, session_config);
     let (b_chat_s, b_chat_r) = bounded(CHANNEL_SIZE);
     let (w_chat_s, w_chat_r) = bounded(CHANNEL_SIZE);
-    let b_exit = connect_player_game(black_player, black_cmd, b_chat_r, &w_chat_s);
-    let w_exit = connect_player_game(white_player, white_cmd, w_chat_r, &b_chat_s);
-    (b_exit, w_exit)
+    // send start messages
+    let _ = black_player
+        .sender()
+        .send(Responses::GameStarted(Black))
+        .await;
+    let _ = white_player
+        .sender()
+        .send(Responses::GameStarted(White))
+        .await;
+    let b_exit = connect_player_game(black_player, black_cmd, b_chat_r, &w_chat_s, Black);
+    let w_exit = connect_player_game(white_player, white_cmd, w_chat_r, &b_chat_s, White);
+    (b_exit.await, w_exit.await)
 }
 
-enum ExitState {
-    EnterLobby(ClientConnection),
-    ExitGame,
-}
-
+/// this function connects a `ClientConnection` with `Commands`.
 fn connect_player_game(
-    mut player: ClientConnection,
+    player: ClientConnection,
     mut command: Commands,
     chat_receiver: Receiver<String>,
     chat_sender: &Sender<String>,
+    color: Color,
 ) -> JoinHandle<ExitState> {
     let session_rsp = command.get_listener().unwrap();
     let player_sender = player.sender().clone();
-    let player_sender_for_chat = player.sender().clone();
+    let player_chat_sender = player.sender().clone();
+    let player_name = player.player_name().to_string();
     let chat_sender = chat_sender.clone();
-    let (mut chat_receiver, chat_stopper) = Pause::new(chat_receiver);
+    let (mut chat_receiver, chat_stopper) = Plug::new(chat_receiver);
     // send chat messages
     task::spawn(async move {
-        while let Some(next_chat) = chat_receiver.next().await {
-            match next_chat {
-                Next::Paused(_) => {
-                    break;
-                }
-                Next::Msg(msg) => {
-                    let _ = player_sender_for_chat.send(Responses::ChatMessage(msg)).await;
-                }
-            }
+        while let Some(msg) = chat_receiver.next().await {
+            let _ = player_chat_sender
+                .send(Responses::ChatMessage(player_name.clone(), msg))
+                .await;
         }
     });
     // handle session response and player commands
@@ -72,80 +84,78 @@ fn connect_player_game(
                     handle_command(cmd, &command, &chat_sender).await
                 }
                 rsp = session.next() => {
-                    handle_session_response(rsp, &player_sender).await
+                    handle_session_response(rsp, &player_sender, color).await
                 }
             } as NextStep;
             match next_step {
-                NextStep::EnterLobby => {
-                    chat_stopper.pause();
-                    break ExitState::EnterLobby(player.into_inner())
-                },
+                NextStep::EnterLobby(result) => {
+                    let _ = chat_stopper.unplug().await;
+                    break ExitState::ReturnRoom(player.into_inner(), result);
+                }
                 NextStep::ExitGame => {
-                    chat_stopper.pause();
-                    break ExitState::ExitGame
-                },
-                NextStep::Continue => {},
+                    let _ = chat_stopper.unplug().await;
+                    break ExitState::ExitGame;
+                }
+                NextStep::Continue => {}
             }
         }
     })
 }
 
 enum NextStep {
-    EnterLobby,
+    EnterLobby(PlayerResult),
     ExitGame,
     Continue,
 }
 
 async fn handle_command(
-    msg: Option<Received<Messages>>,
+    msg: Option<Messages>,
     command: &Commands,
-    chat_sender: &Sender<String>
+    chat_sender: &Sender<String>,
 ) -> NextStep {
     if let Some(msg) = msg {
         match msg {
-            Received::Response(rsp) => match rsp {
-                Messages::Play(x, y) => command.play(x, y).await,
-                Messages::RequestUndo => command.request_undo().await,
-                Messages::ApproveUndo => command.approve_undo().await,
-                Messages::RejectUndo => command.reject_undo().await,
-                Messages::ChatMessage(msg) => {
-                    let _ = chat_sender.send(msg).await;
-                },
-                Messages::QuitGameSession => {
-                    command.quit(PlayerQuitReason::QuitSession).await;
-                    return NextStep::EnterLobby;
-                },
-                Messages::ExitGame => {
-                    command.quit(PlayerQuitReason::ExitGame).await;
-                    return NextStep::ExitGame;
-                },
-                Messages::ClientError(e) => {
-                    command.quit(PlayerQuitReason::Error(e)).await;
-                    return NextStep::ExitGame;
-                },
-                _ => {}
-            },
-            Received::Ping => {}
-            Received::Error(_) | Received::RemoteError(_) => {
-                command
-                    .quit(PlayerQuitReason::Error("connection error".to_string()))
-                    .await;
+            Messages::Play(x, y) => command.play(x, y).await,
+            Messages::RequestUndo => command.request_undo().await,
+            Messages::ApproveUndo => command.approve_undo().await,
+            Messages::RejectUndo => command.reject_undo().await,
+            Messages::ChatMessage(msg) => {
+                let _ = chat_sender.send(msg).await;
+            }
+            Messages::QuitGameSession => {
+                command.quit(PlayerQuitReason::QuitSession).await;
+                return NextStep::EnterLobby(PlayerResult::Quit);
+            }
+            Messages::ExitGame => {
+                command.quit(PlayerQuitReason::ExitGame).await;
                 return NextStep::ExitGame;
             }
+            Messages::ClientError(e) => {
+                command.quit(PlayerQuitReason::Error(e)).await;
+                return NextStep::ExitGame;
+            }
+            _ => {}
         };
         NextStep::Continue
     } else {
+        // player disconnected (maybe due to connection error)
         command.quit(PlayerQuitReason::Disconnected).await;
         NextStep::ExitGame
     }
 }
 
 // do not need to handle disconnection at sending message
-async fn handle_session_response(rsp: Option<PlayerResponse>, player_sender: &Sender<Responses>) -> NextStep {
+async fn handle_session_response(
+    rsp: Option<PlayerResponse>,
+    player_sender: &Sender<Responses>,
+    color: Color,
+) -> NextStep {
     match rsp {
         Some(rsp) => {
             let _ = match rsp {
-                PlayerResponse::FieldUpdate(f) => player_sender.send(Responses::FieldUpdate(f)).await,
+                PlayerResponse::FieldUpdate(f) => {
+                    player_sender.send(Responses::FieldUpdate(f)).await
+                }
                 PlayerResponse::UndoRequest => player_sender.send(Responses::UndoRequest).await,
                 PlayerResponse::Undo(u_rsp) => match u_rsp {
                     UndoResponse::TimeoutRejected => {
@@ -155,42 +165,64 @@ async fn handle_session_response(rsp: Option<PlayerResponse>, player_sender: &Se
                     UndoResponse::RejectedByOpponent => {
                         player_sender.send(Responses::UndoRejectedByOpponent).await
                     }
-                    UndoResponse::AutoRejected => player_sender.send(Responses::UndoAutoRejected).await,
+                    UndoResponse::AutoRejected => {
+                        player_sender.send(Responses::UndoAutoRejected).await
+                    }
                 },
                 PlayerResponse::Quit(q) => {
                     return match q {
-                        GameQuitResponse::GameEnd(end) => {
-                            let _ = match end {
-                                GameResult::BlackTimeout => {
-                                    player_sender.send(Responses::GameEndBlackTimeout).await
+                        GameQuitResponse::GameEnd(end) => match end {
+                            GameResult::BlackTimeout => {
+                                let _ = player_sender.send(Responses::GameEndBlackTimeout).await;
+                                match color {
+                                    Black => NextStep::EnterLobby(PlayerResult::Lose),
+                                    White => NextStep::EnterLobby(PlayerResult::Win),
                                 }
-                                GameResult::WhiteTimeout => {
-                                    player_sender.send(Responses::GameEndWhiteTimeout).await
+                            }
+                            GameResult::WhiteTimeout => {
+                                let _ = player_sender.send(Responses::GameEndWhiteTimeout).await;
+                                match color {
+                                    Black => NextStep::EnterLobby(PlayerResult::Win),
+                                    White => NextStep::EnterLobby(PlayerResult::Lose),
                                 }
-                                GameResult::BlackWins => player_sender.send(Responses::GameEndBlackWins).await,
-                                GameResult::WhiteWins => player_sender.send(Responses::GameEndWhiteWins).await,
-                                GameResult::Draw => player_sender.send(Responses::GameEndDraw).await,
-                            };
-                            NextStep::EnterLobby
+                            }
+                            GameResult::BlackWins => {
+                                let _ = player_sender.send(Responses::GameEndBlackWins).await;
+                                match color {
+                                    Black => NextStep::EnterLobby(PlayerResult::Win),
+                                    White => NextStep::EnterLobby(PlayerResult::Lose),
+                                }
+                            }
+                            GameResult::WhiteWins => {
+                                let _ = player_sender.send(Responses::GameEndWhiteWins).await;
+                                match color {
+                                    Black => NextStep::EnterLobby(PlayerResult::Lose),
+                                    White => NextStep::EnterLobby(PlayerResult::Win),
+                                }
+                            }
+                            GameResult::Draw => {
+                                let _ = player_sender.send(Responses::GameEndDraw).await;
+                                NextStep::EnterLobby(PlayerResult::Draw)
+                            }
                         },
-                        GameQuitResponse::PlayerQuitSession(_) => {
+                        GameQuitResponse::OpponentQuitSession(_) => {
                             let _ = player_sender.send(Responses::OpponentQuitGameSession).await;
                             // enter lobby on opponent quit
-                            NextStep::EnterLobby
+                            NextStep::EnterLobby(PlayerResult::OpponentQuit)
                         }
-                        GameQuitResponse::PlayerExitGame(_) => {
+                        GameQuitResponse::OpponentExitGame(_) => {
                             let _ = player_sender.send(Responses::OpponentExitGame).await;
-                            NextStep::EnterLobby
+                            NextStep::EnterLobby(PlayerResult::OpponentQuit)
                         }
-                        GameQuitResponse::PlayerDisconnected(_) => {
+                        GameQuitResponse::OpponentDisconnected(_) => {
                             let _ = player_sender.send(Responses::OpponentDisconnected).await;
-                            NextStep::EnterLobby
+                            NextStep::EnterLobby(PlayerResult::OpponentQuit)
                         }
-                        GameQuitResponse::PlayerError(_, e) => {
+                        GameQuitResponse::OpponentError(_, e) => {
                             let _ = player_sender
                                 .send(Responses::GameSessionError(format!("player error: {}", e)))
                                 .await;
-                            NextStep::EnterLobby
+                            NextStep::EnterLobby(PlayerResult::OpponentQuit)
                         }
                         GameQuitResponse::GameError(e) => {
                             let _ = player_sender
@@ -198,11 +230,23 @@ async fn handle_session_response(rsp: Option<PlayerResponse>, player_sender: &Se
                                 .await;
                             NextStep::ExitGame
                         }
-                    }
+                    };
                 }
             };
             NextStep::Continue
         }
-        None => unreachable!()
+        None => unreachable!(),
+    }
+}
+
+impl Display for PlayerResult {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            PlayerResult::Win => "win",
+            PlayerResult::Lose => "lose",
+            PlayerResult::Draw => "draw",
+            PlayerResult::Quit => "quit",
+            PlayerResult::OpponentQuit => "opponent_quit",
+        })
     }
 }

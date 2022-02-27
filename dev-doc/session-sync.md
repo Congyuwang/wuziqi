@@ -116,7 +116,3 @@ sequenceDiagram
     Note over w: my color
     Note over w: allow Undo
 ```
-
-### Case 3: White Player has played
-
-Similar to case 2.

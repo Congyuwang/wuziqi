@@ -5,7 +5,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 const TOKEN_LENGTH: usize = 10;
 
-#[derive(Debug, PartialEq, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct RoomToken(pub(crate) [u8; TOKEN_LENGTH]);
 
 impl RoomToken {
@@ -18,11 +18,11 @@ impl RoomToken {
         RoomToken(inner)
     }
 
-    pub(crate) fn from_code(code: &str) -> Result<Self> {
+    pub fn from_code(code: &str) -> Result<Self> {
         decode_token(code)
     }
 
-    pub(crate) fn as_code(&self) -> Result<String> {
+    pub fn as_code(&self) -> String {
         encode_token(self)
     }
 }
@@ -87,15 +87,12 @@ fn decode_token(code: &str) -> Result<RoomToken> {
 }
 
 #[inline]
-fn encode_token(token: &RoomToken) -> Result<String> {
-    if token.0.len() != TOKEN_LENGTH {
-        Err(Error::msg("incorrect token length"))?
-    }
+fn encode_token(token: &RoomToken) -> String {
     let mut out = String::with_capacity(TOKEN_LENGTH);
     for t in &token.0 {
-        out.push_str(code_to_char(t)?)
+        out.push_str(code_to_char(t).unwrap())
     }
-    Ok(out)
+    out
 }
 
 #[cfg(test)]
@@ -106,7 +103,7 @@ mod test_room_manager {
     fn test_decode() {
         let token = "观自在菩萨行深般若波";
         assert_eq!(
-            RoomToken::from_code(token).unwrap().as_code().unwrap(),
+            RoomToken::from_code(token).unwrap().as_code(),
             token.to_string()
         );
     }
@@ -122,10 +119,7 @@ mod test_room_manager {
         let mut rng = thread_rng();
         for _ in 0..1000 {
             let token = RoomToken::random(&mut rng);
-            assert_eq!(
-                RoomToken::from_code(&token.as_code().unwrap()).unwrap(),
-                token
-            )
+            assert_eq!(RoomToken::from_code(&token.as_code()).unwrap(), token)
         }
     }
 }
