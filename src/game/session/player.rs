@@ -413,7 +413,7 @@ impl PlayerState {
         let total_delay = if self.config.undo_request_timeout == 0 {
             None
         } else {
-            Some(Duration::from_secs(self.config.play_timeout))
+            Some(Duration::from_secs(self.config.undo_request_timeout))
         };
         self.undo_dialogue = Some(UndoDialogue::Approving(TimeoutGate::new(
             total_delay,
