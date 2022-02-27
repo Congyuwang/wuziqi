@@ -147,9 +147,11 @@ impl RoomInner {
         let p1_info = self.player_info_mut(First).as_mut().unwrap();
         let conn1 = p1_info.return_from_session(conn1);
         let p1_name = p1_info.player_name.clone();
+        p1_info.unready();
         let p2_info = self.player_info_mut(Second).as_mut().unwrap();
         let conn2 = p2_info.return_from_session(conn2);
         let p2_name = p2_info.player_name.clone();
+        p2_info.unready();
         self.run_player_message_loop(conn1, First);
         self.run_player_message_loop(conn2, Second);
         // send responses on returning to room
@@ -179,6 +181,7 @@ impl RoomInner {
         if let ExitState::ReturnRoom(conn, _) = exit_state {
             let p_info = self.player_info_mut(pos).as_mut().unwrap();
             let conn = p_info.return_from_session(conn);
+            p_info.unready();
             self.run_player_message_loop(conn, pos);
             self.send_response(
                 pos,
