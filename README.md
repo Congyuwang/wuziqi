@@ -1,75 +1,106 @@
-# Server
+# rust async exercise 五子棋游戏 server
 
-## 接收网络（async loop）、解码
+```rust
+pub enum Messages {
+  /// send user name
+  UserName(String),
+  /// create a new room
+  CreateRoom(SessionConfig),
+  /// attempt to join a room with a RoomToken
+  JoinRoom(RoomToken),
+  /// Quit a room
+  QuitRoom,
+  /// when in a Room, get ready for a game session
+  Ready,
+  /// reverse `ready`
+  Unready,
+  /// play a position in game [0, 15). Out of bounds are ignored.
+  /// Repeatedly playing on an occupied position will result in `GameError`.
+  Play(u8, u8),
+  /// request undo in game.
+  RequestUndo,
+  /// approve undo requests in game.
+  ApproveUndo,
+  /// reject undo requests in game.
+  RejectUndo,
+  /// quit game session (only quit this round).
+  QuitGameSession,
+  /// chat message
+  ChatMessage(String),
+  /// exit game (quit game and room), close connection
+  /// exiting game without sending `ExitGame` signal is considered `Disconnected`
+  ExitGame,
+  /// client error: other errors excluding network error
+  ClientError(String),
+}
 
-接收玩家的操作：
+#[derive(Clone, PartialEq, Debug)]
+pub enum RoomState {
+  Empty,
+  OpponentReady(String),
+  OpponentUnready(String),
+}
 
-### 房间
-- 新建房间（发送房间号, 相当于token）
-  - 新建房间请求
-  - 发送token
-  - 请求人立即加入房间（加入房间操作）
-  - 新建房间
-- 加入房间（输入token）
-  - 接收（加入房间请求+token）
-  - 发送（加入房间消息）
-- 房间满了
-  - 发送房间满了
-- 接收游戏开始
-  - 广播随机黑白子
-- 游戏开始前：退出房间
-  - 接收（退出+token）
-  - 广播退出消息
-- 游戏进行中：退出该局
-  - 接收（退出+token）
-  - 广播退出消息
-  - 结束游戏
-  - client返回房间等待界面
-
-房间累计记分，退出房间清空
-
-网络retry机制类似
-
-### 掉线
-- 掉线
-  - 发送掉线信息（学习一下，到底怎么弄） 
-- 使用token重连
-  - 接收retry请求
-- 超过5分钟，移除玩家，关闭房间
-  - 提示对方长时间不在线，游戏结束
-
-struct 玩家
-- Sender
-- Receiver
-- token
-- 状态
-- 黑白棋
-
-### 游戏操作
-- 玩家ID:（token，黑/白）pair
-- 着子，包含坐标及玩家ID
-- 心跳（状态：游戏中、游戏结束, 时间戳，可以用于计算网络延时），是否在线
-- 游戏状态更新：该谁下，谁赢了
-- 发送棋盘状态更新
-
-
-## Implementation
-网络接收loop，监听固定网址
-router: 分类分发数据
-game router: 接收所有进行中游戏相关的数据
-room router: 接收新建房间、之类的数据
-每个进行中的游戏都是一个coroutine
-每个房间都是一个coroutine
-每个棋盘都是一个coroutine
-
-
-## server的state
-
-- 房间：token，房间状态
-- 玩家：玩家的TCP链接，掉线可以用ID retry
-
-# Client
-
-- 着子之后client立即显示，并发送游戏操作，如果未接收到棋盘状态更新，就再次发送（再商量）
-
-## 
+#[derive(Clone, PartialEq, Debug)]
+pub enum Responses {
+  /// Connection success
+  ConnectionSuccess,
+  /// Connection Init Error
+  ConnectionInitFailure(ConnectionInitError),
+  /// response to `CreateRoom`
+  RoomCreated(String),
+  /// response to `JoinRoom`
+  /// the two fields are correspondingly
+  /// `room` token
+  JoinRoomSuccess(String, RoomState),
+  /// response to `JoinRoom`
+  JoinRoomFailureTokenNotFound,
+  /// response to `JoinRoom`
+  JoinRoomFailureRoomFull,
+  /// when the other player gets `JoinRoomSuccess`
+  /// the `String` is the username
+  OpponentJoinRoom(String),
+  /// when the other player `QuitRoom`
+  OpponentQuitRoom,
+  /// when the other player is `Ready`
+  OpponentReady,
+  /// when the other play does `Unready`
+  OpponentUnready,
+  /// when both players are `Ready`
+  GameStarted(Color),
+  /// update field
+  FieldUpdate(FieldState),
+  /// opponent request undo
+  UndoRequest,
+  /// undo rejected by timeout
+  UndoTimeoutRejected,
+  /// undo rejected due to synchronization reason
+  UndoAutoRejected,
+  /// undo approved
+  Undo(FieldStateNullable),
+  /// undo rejected by opponent
+  UndoRejectedByOpponent,
+  /// game session ends, black timeout
+  GameEndBlackTimeout,
+  /// game session ends, white timeout
+  GameEndWhiteTimeout,
+  /// game session ends, black wins
+  GameEndBlackWins,
+  /// game session ends, white wins
+  GameEndWhiteWins,
+  /// game session ends, draw
+  GameEndDraw,
+  /// Room score information (player1, player2)
+  RoomScores((String, u16), (String, u16)),
+  /// opponent quit game session
+  OpponentQuitGameSession,
+  /// opponent exit game
+  OpponentExitGame,
+  /// opponent disconnected
+  OpponentDisconnected,
+  /// game session ends in error
+  GameSessionError(String),
+  /// ChatMessage: (user_name, message)
+  ChatMessage(String, String),
+}
+```
