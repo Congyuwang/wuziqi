@@ -193,14 +193,11 @@ impl RoomInner {
         }
     }
 
+    /// `pos` is *my* position
     async fn chat(&mut self, pos: Position, message: String) {
-        if let Some(info) = self.player_info(pos) {
-            let name = info.player_name.clone();
-            let _ = info
-                .sender
-                .send(Responses::ChatMessage(name, message))
-                .await;
-        }
+        let name = self.player_info(pos).as_ref().unwrap().player_name.clone();
+        self.send_response(pos.opponent(), Responses::ChatMessage(name, message))
+            .await;
     }
 
     /// return unplug handles if both ready
@@ -331,7 +328,7 @@ fn run_room(
                     room.lock().await.unready(pos).await;
                 }
                 Messages::ChatMessage(msg) => {
-                    room.lock().await.chat(pos.opponent(), msg).await;
+                    room.lock().await.chat(pos, msg).await;
                 }
                 Messages::QuitRoom => {
                     if let Some(conn) = room.lock().await.exit(pos).await {

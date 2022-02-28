@@ -56,8 +56,8 @@ pub(crate) async fn start_game_session(
 fn connect_player_game(
     player: ClientConnection,
     mut command: Commands,
-    chat_receiver: Receiver<String>,
-    chat_sender: &Sender<String>,
+    chat_receiver: Receiver<(String, String)>,
+    chat_sender: &Sender<(String, String)>,
     color: Color,
 ) -> JoinHandle<ExitState> {
     let session_rsp = command.get_listener().unwrap();
@@ -68,9 +68,9 @@ fn connect_player_game(
     let (mut chat_receiver, chat_stopper) = Plug::new(chat_receiver);
     // send chat messages
     task::spawn(async move {
-        while let Some(msg) = chat_receiver.next().await {
+        while let Some((name, msg)) = chat_receiver.next().await {
             let _ = player_chat_sender
-                .send(Responses::ChatMessage(player_name.clone(), msg))
+                .send(Responses::ChatMessage(name, msg))
                 .await;
         }
     });
@@ -81,7 +81,7 @@ fn connect_player_game(
         loop {
             let next_step = select! {
                 cmd = player.next() => {
-                    handle_command(cmd, &command, &chat_sender).await
+                    handle_command(cmd, &command, &player_name, &chat_sender).await
                 }
                 rsp = session.next() => {
                     handle_session_response(rsp, &player_sender, color).await
@@ -111,7 +111,8 @@ enum NextStep {
 async fn handle_command(
     msg: Option<Messages>,
     command: &Commands,
-    chat_sender: &Sender<String>,
+    player_name: &str,
+    chat_sender: &Sender<(String, String)>,
 ) -> NextStep {
     if let Some(msg) = msg {
         match msg {
@@ -120,7 +121,7 @@ async fn handle_command(
             Messages::ApproveUndo => command.approve_undo().await,
             Messages::RejectUndo => command.reject_undo().await,
             Messages::ChatMessage(msg) => {
-                let _ = chat_sender.send(msg).await;
+                let _ = chat_sender.send((player_name.to_string(), msg)).await;
             }
             Messages::QuitGameSession => {
                 command.quit(PlayerQuitReason::QuitSession).await;
