@@ -1,4 +1,8 @@
-# rust async exercise 五子棋游戏 server
+# rust async exercise 多人在线对战五子棋游戏服务器
+
+## 接口API
+
+### 玩家操作
 
 ```rust
 pub enum Messages {
@@ -33,6 +37,12 @@ pub enum Messages {
   /// client error: other errors excluding network error
   ClientError(String),
 }
+
+```
+
+### 服务器响应
+
+```rust
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum RoomState {
