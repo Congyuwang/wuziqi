@@ -11,7 +11,7 @@ use std::net::SocketAddrV4;
 use std::str::FromStr;
 use std::time::Duration;
 use wuziqi::{
-    handle_connection, Color, Conn, Messages, Received, Responses, RoomState, RoomToken,
+    Color, Conn, Messages, Received, Responses, RoomState, RoomToken,
     SessionConfig,
 };
 
@@ -31,8 +31,7 @@ async fn run_client() -> Result<()> {
     } else {
         match SocketAddrV4::from_str(&args[2]) {
             Ok(addrs) => {
-                let conn: Conn<Messages, Responses> =
-                    handle_connection(TcpStream::connect(addrs).await?, PING_INTERVAL, 512);
+                let conn = Conn::init(TcpStream::connect(addrs).await?, PING_INTERVAL, 512);
                 // login
                 let _ = conn
                     .sender()

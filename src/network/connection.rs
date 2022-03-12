@@ -57,7 +57,15 @@ pub struct Conn<Msg, Rsp> {
     receiver: Receiver<Received<Rsp>>,
 }
 
-impl<Msg, Rsp> Conn<Msg, Rsp> {
+impl<Msg, Rsp> Conn<Msg, Rsp>
+where
+    Msg: Send + 'static + Into<Vec<u8>>,
+    Rsp: Send + 'static + TryFrom<Vec<u8>>,
+{
+    pub fn init(tcp: TcpStream, ping_interval: Option<Duration>, max_data_size: u32) -> Self {
+        handle_connection(tcp, ping_interval, max_data_size)
+    }
+
     pub fn sender(&self) -> &Sender<Msg> {
         &self.sender
     }
@@ -109,7 +117,7 @@ impl Display for ConnectionError {
     }
 }
 
-pub fn handle_connection<Msg, Rsp>(
+fn handle_connection<Msg, Rsp>(
     tcp: TcpStream,
     ping_interval: Option<Duration>,
     max_data_size: u32,

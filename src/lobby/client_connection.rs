@@ -1,5 +1,5 @@
 use crate::lobby::messages::{Messages, Responses};
-use crate::network::connection::{handle_connection, Conn, ConnectionError, Received};
+use crate::network::connection::{Conn, ConnectionError, Received};
 use async_std::channel::Sender;
 use async_std::net::TcpStream;
 use async_std::prelude::Stream;
@@ -62,13 +62,11 @@ impl ClientConnection {
         {
             Ok(id) => id,
             Err(e) => {
-                let inner: Conn<Responses, Messages> =
-                    handle_connection(tcp, Some(PING_INTERVAL), MAX_DATA_SIZE);
+                let inner = Conn::init(tcp, Some(PING_INTERVAL), MAX_DATA_SIZE);
                 return Err((e, inner));
             }
         };
-        let mut inner: Conn<Responses, Messages> =
-            handle_connection(tcp, Some(PING_INTERVAL), MAX_DATA_SIZE);
+        let mut inner = Conn::init(tcp, Some(PING_INTERVAL), MAX_DATA_SIZE);
         let player_name = loop {
             match inner.next().await {
                 None => return Err((ConnectionInitError::ConnectionClosed, inner)),
@@ -164,7 +162,7 @@ impl Stream for ClientConnection {
                                     if let Messages::ToPlayer(name, msg) = msg {
                                         block_on(self.send_to_player(&name, msg));
                                     } else {
-                                        break Poll::Ready(Some(msg))
+                                        break Poll::Ready(Some(msg));
                                     }
                                 }
                                 Received::Ping => {}
