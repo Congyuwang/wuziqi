@@ -161,12 +161,10 @@ impl Stream for ClientConnection {
                         Some(msg) => {
                             match msg {
                                 Received::Response(msg) => {
-                                    break if let Messages::ToPlayer(name, msg) = msg {
-                                        let send_task = self.send_to_player(&name, msg);
-                                        send_task.poll(cx);
-                                        Poll::Pending
+                                    if let Messages::ToPlayer(name, msg) = msg {
+                                        block_on(self.send_to_player(&name, msg));
                                     } else {
-                                        Poll::Ready(Some(msg))
+                                        break Poll::Ready(Some(msg))
                                     }
                                 }
                                 Received::Ping => {}
