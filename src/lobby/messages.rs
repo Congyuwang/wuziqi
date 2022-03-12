@@ -12,6 +12,7 @@ use unroll::unroll_for_loops;
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Messages {
+    ToPlayer(String, Vec<u8>),
     /// send user name
     UserName(String),
     /// create a new room
@@ -53,6 +54,7 @@ pub enum RoomState {
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Responses {
+    FromPlayer(String, Vec<u8>),
     /// Connection success
     ConnectionSuccess,
     /// Connection Init Error
@@ -130,6 +132,7 @@ impl Messages {
             Messages::ExitGame => 10,
             Messages::ClientError(_) => 12,
             Messages::UserName(_) => 100,
+            Messages::ToPlayer(_, _) => 110,
             Messages::ChatMessage(_) => 200,
         }
     }
@@ -152,6 +155,14 @@ impl Into<Vec<u8>> for Messages {
                 dat.extend(conf.undo_request_timeout.to_be_bytes());
                 dat.extend(conf.undo_dialogue_extra_seconds.to_be_bytes());
                 dat.extend(conf.play_timeout.to_be_bytes());
+                dat
+            }
+            Messages::ToPlayer(ref name, ref msg) => {
+                let mut dat = Vec::with_capacity(3 + name.len() + msg.len());
+                dat.push(self.message_type());
+                dat.extend((name.len() as u16).to_be_bytes());
+                dat.extend(name.as_bytes());
+                dat.extend(msg);
                 dat
             }
             Messages::JoinRoom(ref token) => {
@@ -224,6 +235,23 @@ impl TryFrom<Vec<u8>> for Messages {
             10 => Ok(Messages::ExitGame),
             12 => Ok(Messages::ClientError(decode_utf8_string(&bytes)?)),
             100 => Ok(Messages::UserName(decode_utf8_string(&bytes)?)),
+            110 => {
+                if bytes.len() < 3 {
+                    Err(Error::msg(
+                        "client message decode error, incorrect byte length",
+                    ))?
+                }
+                let name_len = u16::from_be_bytes([bytes[1], bytes[2]]) as usize;
+                if bytes.len() < 3 + name_len {
+                    Err(Error::msg(
+                        "client message decode error, incorrect byte length",
+                    ))?
+                }
+                let name = String::from_utf8(bytes[3..(3 + name_len)].to_vec())
+                    .map_err(|_| Error::msg("utf-8 decode error"))?;
+                let msg = bytes[(3 + name_len)..].to_vec();
+                Ok(Messages::ToPlayer(name, msg))
+            }
             200 => Ok(Messages::ChatMessage(decode_utf8_string(&bytes)?)),
             _ => Err(Error::msg("client messages decode error")),
         }
@@ -260,6 +288,7 @@ impl Responses {
             Responses::RoomScores(_, _) => 24,
             Responses::ConnectionSuccess => 100,
             Responses::ConnectionInitFailure(_) => 110,
+            Responses::FromPlayer(_, _) => 120,
             Responses::ChatMessage(_, _) => 200,
         }
     }
@@ -402,6 +431,14 @@ impl Into<Vec<u8>> for Responses {
                 dat.extend(p1.to_be_bytes());
                 dat
             }
+            Responses::FromPlayer(name, msg) => {
+                let mut dat = Vec::with_capacity(3 + name.len() + msg.len());
+                dat.push(self.response_type());
+                dat.extend((name.len() as u16).to_be_bytes());
+                dat.extend(name.as_bytes());
+                dat.extend(msg);
+                dat
+            }
         }
     }
 }
@@ -480,6 +517,23 @@ impl TryFrom<Vec<u8>> for Responses {
                     6 => ConnectionInitError::InvalidUserName,
                     _ => ConnectionInitError::NetworkError(ConnectionError::UnknownError),
                 }))
+            }
+            120 => {
+                if bytes.len() < 3 {
+                    Err(Error::msg(
+                        "client message decode error, incorrect byte length",
+                    ))?
+                }
+                let name_len = u16::from_be_bytes([bytes[1], bytes[2]]) as usize;
+                if bytes.len() < 3 + name_len {
+                    Err(Error::msg(
+                        "client message decode error, incorrect byte length",
+                    ))?
+                }
+                let name = String::from_utf8(bytes[3..(3 + name_len)].to_vec())
+                    .map_err(|_| Error::msg("utf-8 decode error"))?;
+                let msg = bytes[(3 + name_len)..].to_vec();
+                Ok(Responses::FromPlayer(name, msg))
             }
             200 => {
                 let (name, msg) = decode_chat_message(&bytes)?;
@@ -673,6 +727,8 @@ mod test_encode_decode {
         assert_msg_eq(Messages::ClientError("decode error".to_string()));
         assert_msg_eq(Messages::UserName("user name".to_string()));
         assert_msg_eq(Messages::ChatMessage("chat message".to_string()));
+        assert_msg_eq(Messages::ToPlayer("香菱".to_string(), Vec::from("good")));
+        assert_msg_eq(Messages::ToPlayer("香菱".to_string(), Vec::new()));
     }
 
     #[test]
@@ -729,5 +785,7 @@ mod test_encode_decode {
         assert_rsp_eq(Responses::ConnectionInitFailure(
             ConnectionInitError::UserNameTooLong,
         ));
+        assert_rsp_eq(Responses::FromPlayer("香菱".to_string(), Vec::from("good")));
+        assert_rsp_eq(Responses::FromPlayer("香菱".to_string(), Vec::new()));
     }
 }

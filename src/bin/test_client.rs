@@ -161,6 +161,17 @@ fn string_to_msg(msg: &str) -> Option<Messages> {
         }
     } else if msg.starts_with("exit") {
         Some(Messages::ExitGame)
+    } else if msg.starts_with("to") {
+        let messages: Vec<&str> = msg.splitn(3, " ").collect();
+        if messages.len() < 3 {
+            print_help();
+            None
+        } else {
+            Some(Messages::ToPlayer(
+                messages[1].to_string(),
+                Vec::from(messages[2]),
+            ))
+        }
     } else {
         print_help();
         None
@@ -170,6 +181,7 @@ fn string_to_msg(msg: &str) -> Option<Messages> {
 fn print_help() {
     println!(
         "commands:\n\
+        - to `player` `msg`
         - new room\n\
         - join 'token'\n\
         - quit room\n\
@@ -261,6 +273,9 @@ fn rsp_to_string(rsp: Responses) -> String {
         }
         Responses::ChatMessage(name, msg) => {
             format!("chat message from {}:\n>> {}", name, msg)
+        }
+        Responses::FromPlayer(name, msg) => {
+            format!("from {} : {}", name, String::from_utf8(msg).unwrap())
         }
     }
 }

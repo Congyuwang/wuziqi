@@ -8,7 +8,7 @@ use async_std::task::block_on;
 use futures::StreamExt;
 use log::{error, info};
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::hash::Hash;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::pin::Pin;
@@ -38,7 +38,7 @@ pub struct ClientConnection {
     player_id: u64,
     socket_address: SocketAddr,
     connection_stats: Arc<Mutex<ConnectionStats>>,
-    name_dict: Arc<Mutex<HashSet<String>>>,
+    name_dict: Arc<Mutex<HashMap<String, Sender<Responses>>>>,
 }
 
 /// Handle Client Connection
@@ -52,7 +52,7 @@ impl ClientConnection {
         tcp: TcpStream,
         socket_address: SocketAddr,
         connection_stats: Arc<Mutex<ConnectionStats>>,
-        name_dict: Arc<Mutex<HashSet<String>>>,
+        name_dict: Arc<Mutex<HashMap<String, Sender<Responses>>>>,
     ) -> Result<Self, (ConnectionInitError, Conn<Responses, Messages>)> {
         // add connection
         let player_id = match connection_stats
@@ -81,11 +81,21 @@ impl ClientConnection {
                                 } else {
                                     if name.is_empty() | name.contains("\n") {
                                         return Err((ConnectionInitError::InvalidUserName, inner));
-                                    } else if name_dict.lock().await.replace(name.clone()).is_some()
-                                    {
-                                        return Err((ConnectionInitError::UserNameExists, inner));
                                     } else {
-                                        break name;
+                                        let mut name_dict = name_dict.lock().await;
+                                        match name_dict.entry(name) {
+                                            Entry::Occupied(_) => {
+                                                return Err((
+                                                    ConnectionInitError::UserNameExists,
+                                                    inner,
+                                                ));
+                                            }
+                                            Entry::Vacant(v) => {
+                                                let my_name = v.key().clone();
+                                                v.insert(inner.sender().clone());
+                                                break my_name;
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -120,6 +130,15 @@ impl ClientConnection {
         self.inner.sender()
     }
 
+    pub(crate) async fn send_to_player(&self, name: &str, msg: Vec<u8>) {
+        let name_dict = self.name_dict.lock().await;
+        if let Some(sender) = name_dict.get(name) {
+            let _ = sender
+                .send(Responses::FromPlayer(self.player_name.clone(), msg))
+                .await;
+        }
+    }
+
     pub fn player_name(&self) -> &str {
         &self.player_name
     }
@@ -141,7 +160,13 @@ impl Stream for ClientConnection {
                         None => break Poll::Ready(None),
                         Some(msg) => {
                             match msg {
-                                Received::Response(msg) => break Poll::Ready(Some(msg)),
+                                Received::Response(msg) => {
+                                    if let Messages::ToPlayer(name, msg) = msg {
+                                        block_on(self.send_to_player(&name, msg));
+                                    } else {
+                                        break Poll::Ready(Some(msg));
+                                    }
+                                }
                                 Received::Ping => {}
                                 Received::Error(e) => {
                                     // log and quit on connection error automatically

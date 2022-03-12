@@ -11,14 +11,14 @@ use async_std::sync::Mutex;
 pub use client_connection::{ClientConnection, ConnectionInitError, ConnectionStats};
 pub use messages::{Messages, Responses, RoomState};
 use room_manager::RoomManager;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::net::SocketAddrV4;
 use std::sync::Arc;
 pub use token::RoomToken;
 
 pub async fn start_server(addrs: SocketAddrV4) -> Result<()> {
     let connection_stats = ConnectionStats::new();
-    let user_name_set = Arc::new(Mutex::new(HashSet::new()));
+    let user_name_set = Arc::new(Mutex::new(HashMap::new()));
     let room_manager = RoomManager::new();
     let listener = TcpListener::bind(addrs).await?;
     while let Ok((stream, socket)) = listener.accept().await {
