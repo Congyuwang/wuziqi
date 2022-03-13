@@ -4,6 +4,7 @@ use crate::game::session::messages::{
     UndoAction::{Approve, Reject},
 };
 use async_std::channel::{Receiver, Sender};
+use serde::{Serialize, Deserialize};
 
 /// Public API used for interacting with the game
 pub struct Commands {
@@ -119,7 +120,7 @@ pub enum GameResult {
 
 /// this struct represents a game field
 /// and also the coordinate of the latest position
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct FieldState {
     pub latest: (u8, u8, Color),
     pub field: [[State; 15]; 15],
@@ -127,7 +128,7 @@ pub struct FieldState {
 
 /// this struct represents a game field
 /// and also the coordinate of the latest position
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct FieldStateNullable {
     pub latest: Option<(u8, u8, Color)>,
     pub field: [[State; 15]; 15],
@@ -136,7 +137,7 @@ pub struct FieldStateNullable {
 /// client time should be shorter
 ///
 /// 0 means no timeout
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct SessionConfig {
     pub undo_request_timeout: u64,
     pub undo_dialogue_extra_seconds: u64,

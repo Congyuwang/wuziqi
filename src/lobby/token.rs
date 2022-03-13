@@ -2,10 +2,11 @@ use anyhow::{Error, Result};
 use rand::prelude::*;
 use std::hash::Hash;
 use unicode_segmentation::UnicodeSegmentation;
+use serde::{Serialize, Deserialize};
 
 const TOKEN_LENGTH: usize = 10;
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
 pub struct RoomToken(pub(crate) [u8; TOKEN_LENGTH]);
 
 impl RoomToken {

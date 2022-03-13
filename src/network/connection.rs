@@ -43,6 +43,7 @@ use std::net::Shutdown;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
+use serde::{Serialize, Deserialize};
 
 const NET_CHANNEL_SIZE: usize = 20;
 
@@ -91,7 +92,7 @@ pub enum Received<T> {
     RemoteError(ConnectionError),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ConnectionError {
     /// Attempting to send or receive over-sized data payload
     MaxDataLengthExceeded,

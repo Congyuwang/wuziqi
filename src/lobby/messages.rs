@@ -9,8 +9,9 @@ use crate::lobby::token::RoomToken;
 use crate::network::connection::ConnectionError;
 use anyhow::{Error, Result};
 use unroll::unroll_for_loops;
+use serde::{Serialize, Deserialize};
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub enum Messages {
     ToPlayer(String, Vec<u8>),
     /// send user name
@@ -45,14 +46,14 @@ pub enum Messages {
     ClientError(String),
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub enum RoomState {
     Empty,
     OpponentReady(String),
     OpponentUnready(String),
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub enum Responses {
     FromPlayer(String, Vec<u8>),
     /// Connection success

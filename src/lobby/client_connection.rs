@@ -15,13 +15,14 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
+use serde::{Serialize, Deserialize};
 
 const PING_INTERVAL: Duration = Duration::from_secs(5);
 const MAX_DATA_SIZE: u32 = 1024;
 const SINGLE_IP_MAX_CONN: u32 = 16;
 const MAX_USER_NAME_BYTES: usize = 32;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ConnectionInitError {
     IpMaxConnExceed,
     ConnectionClosed,
