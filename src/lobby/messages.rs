@@ -685,7 +685,7 @@ impl TryFrom<Vec<u8>> for Responses {
                     cursor
                         .read_exact(&mut name_len_bytes)
                         .map_err(|_| Error::msg("server response decode error"))?;
-                    let name_len = u16::from_be_bytes([bytes[1], bytes[2]]) as usize;
+                    let name_len = u16::from_be_bytes(name_len_bytes) as usize;
                     let mut string_bytes = vec![0u8; name_len];
                     cursor
                         .read_exact(&mut string_bytes)
@@ -767,8 +767,14 @@ mod test_encode_decode {
 
     fn assert_rsp_eq(rsp: Responses) {
         let decoded_rsp =
-            Responses::try_from(<Responses as Into<Vec<u8>>>::into(rsp.clone())).unwrap();
-        assert_eq!(rsp, decoded_rsp)
+            Responses::try_from(<Responses as Into<Vec<u8>>>::into(rsp.clone()));
+        match decoded_rsp {
+            Ok(decoded_rsp) => assert_eq!(rsp, decoded_rsp),
+            Err(e) => {
+                println!("failed on error: {}", e);
+                panic!()
+            },
+        }
     }
 
     #[test]
@@ -855,8 +861,9 @@ mod test_encode_decode {
         assert_rsp_eq(Responses::FromPlayer("香菱".to_string(), Vec::from("good")));
         assert_rsp_eq(Responses::FromPlayer("香菱".to_string(), Vec::new()));
         assert_rsp_eq(Responses::PlayerList(vec![
-            "巴巴托斯".to_string(),
-            "巴巴爸爸".to_string(),
+            "枫原万叶".to_string(),
+            "leon".to_string(),
+            "神里绫华".to_string()
         ]));
         assert_rsp_eq(Responses::PlayerList(vec![]));
     }
