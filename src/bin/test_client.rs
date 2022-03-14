@@ -143,6 +143,13 @@ fn string_to_msg(msg: &str) -> Option<Messages> {
         Some(Messages::RequestUndo)
     } else if msg.starts_with("approve undo") {
         Some(Messages::ApproveUndo)
+    } else if msg.starts_with("search") {
+        let cmd: Vec<String> = msg.splitn(2, " ").map(|x| x.to_string()).collect();
+        if cmd.len() < 2 {
+            Some(Messages::SearchOnlinePlayers(None, 20))
+        } else {
+            Some(Messages::SearchOnlinePlayers(Some(cmd[1].clone()), 20))
+        }
     } else if msg.starts_with("reject undo") {
         Some(Messages::RejectUndo)
     } else if msg.starts_with("quit session") {
@@ -177,8 +184,9 @@ fn string_to_msg(msg: &str) -> Option<Messages> {
 fn print_help() {
     println!(
         "commands:\n\
-        - to `player` `msg`
+        - to `player` `msg`\n\
         - new room\n\
+        - search 'name'\n\
         - join 'token'\n\
         - quit room\n\
         - ready\n\
@@ -272,6 +280,14 @@ fn rsp_to_string(rsp: Responses) -> String {
         }
         Responses::FromPlayer(name, msg) => {
             format!("from {} : {}", name, String::from_utf8(msg).unwrap())
+        }
+        Responses::PlayerList(names) => {
+            let mut list_str = String::new();
+            list_str.extend("received online players:\n".chars());
+            for name in names {
+                list_str.extend(format!("    - {}", name).chars());
+            }
+            list_str
         }
     }
 }

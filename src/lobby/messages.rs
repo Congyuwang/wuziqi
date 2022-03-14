@@ -679,6 +679,9 @@ impl TryFrom<Vec<u8>> for Responses {
                 let mut names = Vec::new();
                 let mut name_len_bytes = [0u8; 2];
                 loop {
+                    if cursor.position() >= bytes.len() as u64 {
+                        break;
+                    }
                     cursor
                         .read_exact(&mut name_len_bytes)
                         .map_err(|_| Error::msg("server response decode error"))?;
@@ -690,9 +693,6 @@ impl TryFrom<Vec<u8>> for Responses {
                     let name = String::from_utf8(string_bytes)
                         .map_err(|_| Error::msg("utf-8 decode error"))?;
                     names.push(name);
-                    if cursor.position() >= bytes.len() as u64 {
-                        break;
-                    }
                 }
                 Ok(Responses::PlayerList(names))
             }
@@ -857,6 +857,7 @@ mod test_encode_decode {
         assert_rsp_eq(Responses::PlayerList(vec![
             "巴巴托斯".to_string(),
             "巴巴爸爸".to_string(),
-        ]))
+        ]));
+        assert_rsp_eq(Responses::PlayerList(vec![]));
     }
 }
