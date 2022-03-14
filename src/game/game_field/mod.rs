@@ -2,7 +2,7 @@ mod api;
 mod compression;
 mod field;
 mod utility;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 /// Represents player action (black or white)
 #[derive(Clone, PartialEq, Copy, Debug, Serialize, Deserialize)]

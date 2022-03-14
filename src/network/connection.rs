@@ -37,13 +37,13 @@ use async_std::prelude::Stream;
 use async_std::task;
 use crc32fast::hash as checksum;
 use futures::{AsyncWriteExt, StreamExt};
+use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
 use std::io::ErrorKind;
 use std::net::Shutdown;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
-use serde::{Serialize, Deserialize};
 
 const NET_CHANNEL_SIZE: usize = 20;
 

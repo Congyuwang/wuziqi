@@ -69,6 +69,13 @@ impl RoomManager {
                         }
                         break;
                     }
+                    Messages::SearchOnlinePlayers(name, n) => {
+                        let _ = conn.sender()
+                            .send(Responses::PlayerList(
+                                conn.get_online_players(name, n as usize).await,
+                            ))
+                            .await;
+                    }
                     Messages::JoinRoom(token) => {
                         let rooms = manager.rooms.lock().await;
                         if let Some(room) = rooms.get(&token) {

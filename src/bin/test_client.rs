@@ -10,10 +10,7 @@ use std::env;
 use std::net::SocketAddrV4;
 use std::str::FromStr;
 use std::time::Duration;
-use wuziqi::{
-    Color, Conn, Messages, Received, Responses, RoomState, RoomToken,
-    SessionConfig,
-};
+use wuziqi::{Color, Conn, Messages, Received, Responses, RoomState, RoomToken, SessionConfig};
 
 const PING_INTERVAL: Option<Duration> = Some(Duration::from_secs(5));
 

@@ -4,7 +4,7 @@ use crate::game::session::messages::{
     UndoAction::{Approve, Reject},
 };
 use async_std::channel::{Receiver, Sender};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 /// Public API used for interacting with the game
 pub struct Commands {

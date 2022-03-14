@@ -1,8 +1,8 @@
 use anyhow::{Error, Result};
 use rand::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::hash::Hash;
 use unicode_segmentation::UnicodeSegmentation;
-use serde::{Serialize, Deserialize};
 
 const TOKEN_LENGTH: usize = 10;
 

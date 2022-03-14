@@ -7,6 +7,7 @@ use async_std::sync::Mutex;
 use async_std::task::block_on;
 use futures::StreamExt;
 use log::{error, info};
+use serde::{Deserialize, Serialize};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -15,12 +16,12 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
-use serde::{Serialize, Deserialize};
 
 const PING_INTERVAL: Duration = Duration::from_secs(5);
 const MAX_DATA_SIZE: u32 = 1024;
 const SINGLE_IP_MAX_CONN: u32 = 16;
 const MAX_USER_NAME_BYTES: usize = 32;
+const MAX_PLAYER_SEARCH_RESULT_COUNT: usize = 20;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ConnectionInitError {
@@ -127,6 +128,21 @@ impl ClientConnection {
 
     pub(crate) fn sender(&self) -> &Sender<Responses> {
         self.inner.sender()
+    }
+
+    pub(crate) async fn get_online_players(&self, name: Option<String>, n: usize) -> Vec<String> {
+        let name_dict = self.name_dict.lock().await;
+        let n = MAX_PLAYER_SEARCH_RESULT_COUNT.min(n);
+        if let Some(name) = name {
+            name_dict
+                .keys()
+                .filter(|&x| x.contains(&name))
+                .take(n)
+                .map(|x| x.clone())
+                .collect()
+        } else {
+            name_dict.keys().take(n).map(|x| x.clone()).collect()
+        }
     }
 
     pub(crate) async fn send_to_player(&self, name: &str, msg: Vec<u8>) {

@@ -8,8 +8,9 @@ use crate::lobby::client_connection::ConnectionInitError;
 use crate::lobby::token::RoomToken;
 use crate::network::connection::ConnectionError;
 use anyhow::{Error, Result};
+use serde::{Deserialize, Serialize};
+use std::io::{Cursor, Read, Seek, SeekFrom};
 use unroll::unroll_for_loops;
-use serde::{Serialize, Deserialize};
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub enum Messages {
@@ -37,6 +38,9 @@ pub enum Messages {
     RejectUndo,
     /// quit game session (only quit this round).
     QuitGameSession,
+    /// search online player names (name, limit)
+    /// currently, at most 20 names will be returned
+    SearchOnlinePlayers(Option<String>, u8),
     /// chat message
     ChatMessage(String),
     /// exit game (quit game and room), close connection
@@ -62,6 +66,8 @@ pub enum Responses {
     ConnectionInitFailure(ConnectionInitError),
     /// response to `CreateRoom`
     RoomCreated(String),
+    /// response to `SearchOnlinePlayers`
+    PlayerList(Vec<String>),
     /// response to `JoinRoom`
     /// the two fields are correspondingly
     /// `room` token
@@ -134,6 +140,7 @@ impl Messages {
             Messages::ClientError(_) => 12,
             Messages::UserName(_) => 100,
             Messages::ToPlayer(_, _) => 110,
+            Messages::SearchOnlinePlayers(_, _) => 120,
             Messages::ChatMessage(_) => 200,
         }
     }
@@ -184,6 +191,15 @@ impl Into<Vec<u8>> for Messages {
                 let mut dat = Vec::new();
                 dat.push(self.message_type());
                 dat.extend(msg.as_bytes());
+                dat
+            }
+            Messages::SearchOnlinePlayers(ref name, n) => {
+                let mut dat = Vec::new();
+                dat.push(self.message_type());
+                dat.push(n);
+                if let Some(name) = name {
+                    dat.extend(name.as_bytes());
+                }
                 dat
             }
             Messages::ClientError(ref msg) => {
@@ -253,6 +269,21 @@ impl TryFrom<Vec<u8>> for Messages {
                 let msg = bytes[(3 + name_len)..].to_vec();
                 Ok(Messages::ToPlayer(name, msg))
             }
+            120 => {
+                if bytes.len() < 2 {
+                    Err(Error::msg(
+                        "client message decode error, incorrect byte length",
+                    ))?
+                }
+                let n = bytes[1];
+                if bytes.len() == 2 {
+                    Ok(Messages::SearchOnlinePlayers(None, n))
+                } else {
+                    let name = String::from_utf8(bytes[2..].to_vec())
+                        .map_err(|_| Error::msg("utf-8 decode error"))?;
+                    Ok(Messages::SearchOnlinePlayers(Some(name), n))
+                }
+            }
             200 => Ok(Messages::ChatMessage(decode_utf8_string(&bytes)?)),
             _ => Err(Error::msg("client messages decode error")),
         }
@@ -290,6 +321,7 @@ impl Responses {
             Responses::ConnectionSuccess => 100,
             Responses::ConnectionInitFailure(_) => 110,
             Responses::FromPlayer(_, _) => 120,
+            Responses::PlayerList(_) => 130,
             Responses::ChatMessage(_, _) => 200,
         }
     }
@@ -438,6 +470,15 @@ impl Into<Vec<u8>> for Responses {
                 dat.extend((name.len() as u16).to_be_bytes());
                 dat.extend(name.as_bytes());
                 dat.extend(msg);
+                dat
+            }
+            Responses::PlayerList(names) => {
+                let mut dat = Vec::new();
+                dat.push(self.response_type());
+                for name in names {
+                    dat.extend((name.len() as u16).to_be_bytes());
+                    dat.extend(name.as_bytes());
+                }
                 dat
             }
         }
@@ -632,6 +673,29 @@ impl TryFrom<Vec<u8>> for Responses {
                 let (p0, p1) = decode_scores(&bytes)?;
                 Ok(Responses::RoomScores(p0, p1))
             }
+            130 => {
+                let mut cursor = Cursor::new(&bytes);
+                cursor.seek(SeekFrom::Start(1)).unwrap();
+                let mut names = Vec::new();
+                let mut name_len_bytes = [0u8; 2];
+                loop {
+                    cursor
+                        .read_exact(&mut name_len_bytes)
+                        .map_err(|_| Error::msg("server response decode error"))?;
+                    let name_len = u16::from_be_bytes([bytes[1], bytes[2]]) as usize;
+                    let mut string_bytes = vec![0u8; name_len];
+                    cursor
+                        .read_exact(&mut string_bytes)
+                        .map_err(|_| Error::msg("server response decode error"))?;
+                    let name = String::from_utf8(string_bytes)
+                        .map_err(|_| Error::msg("utf-8 decode error"))?;
+                    names.push(name);
+                    if cursor.position() >= bytes.len() as u64 {
+                        break;
+                    }
+                }
+                Ok(Responses::PlayerList(names))
+            }
             _ => Err(Error::msg("server response decode error")),
         }
     }
@@ -730,6 +794,8 @@ mod test_encode_decode {
         assert_msg_eq(Messages::ChatMessage("chat message".to_string()));
         assert_msg_eq(Messages::ToPlayer("香菱".to_string(), Vec::from("good")));
         assert_msg_eq(Messages::ToPlayer("香菱".to_string(), Vec::new()));
+        assert_msg_eq(Messages::SearchOnlinePlayers(None, 5));
+        assert_msg_eq(Messages::SearchOnlinePlayers(Some("巴巴".to_string()), 5));
     }
 
     #[test]
@@ -788,5 +854,9 @@ mod test_encode_decode {
         ));
         assert_rsp_eq(Responses::FromPlayer("香菱".to_string(), Vec::from("good")));
         assert_rsp_eq(Responses::FromPlayer("香菱".to_string(), Vec::new()));
+        assert_rsp_eq(Responses::PlayerList(vec![
+            "巴巴托斯".to_string(),
+            "巴巴爸爸".to_string(),
+        ]))
     }
 }
