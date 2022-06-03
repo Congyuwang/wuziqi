@@ -31,7 +31,7 @@ const fn compress_15_states(row: &[State; 15]) -> (u8, u8, u8, u8) {
         compress_four_states(&row[0], &row[1], &row[2], &row[3]),
         compress_four_states(&row[4], &row[5], &row[6], &row[7]),
         compress_four_states(&row[8], &row[9], &row[10], &row[11]),
-        compress_four_states(&row[12], &row[13], &row[14], &State::E),
+        compress_four_states(&row[12], &row[13], &row[14], &E),
     )
 }
 

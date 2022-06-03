@@ -212,15 +212,15 @@ impl Into<Vec<u8>> for Messages {
     }
 }
 impl TryFrom<Vec<u8>> for Messages {
-    type Error = anyhow::Error;
+    type Error = Error;
 
     fn try_from(bytes: Vec<u8>) -> Result<Self> {
         match bytes[0] {
             0 => {
                 if bytes.len() != 25 {
-                    Err(Error::msg(
+                    return Err(Error::msg(
                         "client message decode error, incorrect byte length",
-                    ))?
+                    ))
                 }
                 Ok(Messages::CreateRoom(SessionConfig {
                     undo_request_timeout: u64::from_be_bytes((&bytes[1..9]).try_into().unwrap()),
@@ -239,9 +239,9 @@ impl TryFrom<Vec<u8>> for Messages {
             4 => Ok(Messages::Unready),
             5 => {
                 if bytes.len() != 3 {
-                    Err(Error::msg(
+                    return Err(Error::msg(
                         "client message decode error, incorrect byte length",
-                    ))?
+                    ))
                 }
                 Ok(Messages::Play(bytes[1], bytes[2]))
             }
@@ -254,15 +254,15 @@ impl TryFrom<Vec<u8>> for Messages {
             100 => Ok(Messages::UserName(decode_utf8_string(&bytes)?)),
             110 => {
                 if bytes.len() < 3 {
-                    Err(Error::msg(
+                    return Err(Error::msg(
                         "client message decode error, incorrect byte length",
-                    ))?
+                    ))
                 }
                 let name_len = u16::from_be_bytes([bytes[1], bytes[2]]) as usize;
                 if bytes.len() < 3 + name_len {
-                    Err(Error::msg(
+                    return Err(Error::msg(
                         "client message decode error, incorrect byte length",
-                    ))?
+                    ))
                 }
                 let name = String::from_utf8(bytes[3..(3 + name_len)].to_vec())
                     .map_err(|_| Error::msg("utf-8 decode error"))?;
@@ -271,9 +271,9 @@ impl TryFrom<Vec<u8>> for Messages {
             }
             120 => {
                 if bytes.len() < 2 {
-                    Err(Error::msg(
+                    return Err(Error::msg(
                         "client message decode error, incorrect byte length",
-                    ))?
+                    ))
                 }
                 let n = bytes[1];
                 if bytes.len() == 2 {
@@ -388,8 +388,8 @@ impl Into<Vec<u8>> for Responses {
                 dat
             }
             Responses::GameStarted(c) => match c {
-                Color::Black => [self.response_type(), 0].to_vec(),
-                Color::White => [self.response_type(), 1].to_vec(),
+                Black => [self.response_type(), 0].to_vec(),
+                White => [self.response_type(), 1].to_vec(),
             },
             Responses::FieldUpdate(f) => {
                 let mut dat = Vec::new();
@@ -398,8 +398,8 @@ impl Into<Vec<u8>> for Responses {
                 dat.push(latest.0);
                 dat.push(latest.1);
                 dat.push(match latest.2 {
-                    Color::Black => 0,
-                    Color::White => 1,
+                    Black => 0,
+                    White => 1,
                 });
                 dat.extend(
                     compress_field(&f.field)
@@ -420,8 +420,8 @@ impl Into<Vec<u8>> for Responses {
                         dat.push(latest.0);
                         dat.push(latest.1);
                         dat.push(match latest.2 {
-                            Color::Black => 0,
-                            Color::White => 1,
+                            Black => 0,
+                            White => 1,
                         });
                     }
                 }
@@ -486,7 +486,7 @@ impl Into<Vec<u8>> for Responses {
 }
 
 impl TryFrom<Vec<u8>> for Responses {
-    type Error = anyhow::Error;
+    type Error = Error;
 
     #[unroll_for_loops]
     fn try_from(bytes: Vec<u8>) -> Result<Self> {
@@ -513,15 +513,15 @@ impl TryFrom<Vec<u8>> for Responses {
             100 => Ok(Responses::ConnectionSuccess),
             1 => {
                 if bytes.len() < 3 {
-                    Err(Error::msg(
+                    return Err(Error::msg(
                         "server response decode error, incorrect byte length",
-                    ))?
+                    ))
                 }
                 let token_len = u16::from_be_bytes([bytes[1], bytes[2]]) as usize;
                 if bytes.len() < 3 + token_len + 1 {
-                    Err(Error::msg(
+                    return Err(Error::msg(
                         "server response decode error, incorrect byte length",
-                    ))?
+                    ))
                 }
                 let token = String::from_utf8(bytes[3..3 + token_len].to_vec())
                     .map_err(|_| Error::msg("utf-8 decode error"))?;
@@ -546,9 +546,9 @@ impl TryFrom<Vec<u8>> for Responses {
             }
             110 => {
                 if bytes.len() != 2 {
-                    Err(Error::msg(
+                    return Err(Error::msg(
                         "server response decode error, incorrect byte length",
-                    ))?
+                    ))
                 }
                 Ok(Responses::ConnectionInitFailure(match bytes[1] {
                     1 => ConnectionInitError::IpMaxConnExceed,
@@ -562,15 +562,15 @@ impl TryFrom<Vec<u8>> for Responses {
             }
             120 => {
                 if bytes.len() < 3 {
-                    Err(Error::msg(
+                    return Err(Error::msg(
                         "client message decode error, incorrect byte length",
-                    ))?
+                    ))
                 }
                 let name_len = u16::from_be_bytes([bytes[1], bytes[2]]) as usize;
                 if bytes.len() < 3 + name_len {
-                    Err(Error::msg(
+                    return Err(Error::msg(
                         "client message decode error, incorrect byte length",
-                    ))?
+                    ))
                 }
                 let name = String::from_utf8(bytes[3..(3 + name_len)].to_vec())
                     .map_err(|_| Error::msg("utf-8 decode error"))?;
@@ -583,33 +583,33 @@ impl TryFrom<Vec<u8>> for Responses {
             }
             8 => {
                 if bytes.len() != 2 {
-                    Err(Error::msg(
+                    return Err(Error::msg(
                         "server response decode error, incorrect byte length",
-                    ))?
+                    ))
                 }
                 let color = match bytes[1] {
                     0 => Black,
                     1 => White,
-                    _ => Err(Error::msg(
+                    _ => return Err(Error::msg(
                         "server response decode error, incorrect color byte",
-                    ))?,
+                    )),
                 };
                 Ok(Responses::GameStarted(color))
             }
             9 => {
                 if bytes.len() != 1 + 3 + 4 * 15 {
-                    Err(Error::msg(
+                    return Err(Error::msg(
                         "server response decode error, incorrect byte length",
-                    ))?
+                    ))
                 }
                 let x = bytes[1];
                 let y = bytes[2];
                 let color = match bytes[3] {
                     0 => Black,
                     1 => White,
-                    _ => Err(Error::msg(
+                    _ => return Err(Error::msg(
                         "server response decode error, incorrect color byte",
-                    ))?,
+                    )),
                 };
                 let mut field_dat = [(0u8, 0u8, 0u8, 0u8); 15];
                 for i in 0..15 {
@@ -628,9 +628,9 @@ impl TryFrom<Vec<u8>> for Responses {
             }
             13 => {
                 if bytes.len() != 1 + 4 + 4 * 15 {
-                    Err(Error::msg(
+                    return Err(Error::msg(
                         "server response decode error, incorrect byte length",
-                    ))?
+                    ))
                 }
                 let latest = match bytes[1] {
                     0 => None,
@@ -640,15 +640,15 @@ impl TryFrom<Vec<u8>> for Responses {
                         let color = match bytes[4] {
                             0 => Black,
                             1 => White,
-                            _ => Err(Error::msg(
+                            _ => return Err(Error::msg(
                                 "server response decode error, incorrect color byte",
-                            ))?,
+                            )),
                         };
                         Some((x, y, color))
                     }
-                    _ => Err(Error::msg(
+                    _ => return Err(Error::msg(
                         "server response decode error, incorrect option byte",
-                    ))?,
+                    )),
                 };
                 let mut field_dat = [(0u8, 0u8, 0u8, 0u8); 15];
                 for i in 0..15 {
@@ -746,9 +746,9 @@ fn decode_scores(bytes: &[u8]) -> Result<((String, u16), (String, u16))> {
 fn decode_utf8_string(bytes: &[u8]) -> Result<String> {
     let bytes_len = bytes.len();
     if bytes_len < 2 {
-        Err(Error::msg(
+        return Err(Error::msg(
             "server response decode error, incorrect byte length",
-        ))?
+        ))
     }
     String::from_utf8(bytes[1..].to_vec()).map_err(|_| Error::msg("utf-8 decode error"))
 }
@@ -821,9 +821,9 @@ mod test_encode_decode {
         assert_rsp_eq(Responses::OpponentQuitRoom);
         assert_rsp_eq(Responses::OpponentReady);
         assert_rsp_eq(Responses::OpponentUnready);
-        assert_rsp_eq(Responses::GameStarted(Color::Black));
+        assert_rsp_eq(Responses::GameStarted(Black));
         assert_rsp_eq(Responses::FieldUpdate(FieldState {
-            latest: (5, 3, Color::Black),
+            latest: (5, 3, Black),
             field: [[State::B; 15]; 15],
         }));
         assert_rsp_eq(Responses::UndoRequest);
@@ -834,7 +834,7 @@ mod test_encode_decode {
             field: [[State::W; 15]; 15],
         }));
         assert_rsp_eq(Responses::Undo(FieldStateNullable {
-            latest: Some((5, 3, Color::White)),
+            latest: Some((5, 3, White)),
             field: [[State::E; 15]; 15],
         }));
         assert_rsp_eq(Responses::UndoRejectedByOpponent);

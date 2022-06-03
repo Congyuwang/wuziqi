@@ -258,7 +258,7 @@ where
 async fn read_rsp<Rsp>(
     reader: &mut BufReader<TcpStream>,
     max_data_size: u32,
-) -> std::result::Result<Option<Received<Rsp>>, ConnectionError>
+) -> Result<Option<Received<Rsp>>, ConnectionError>
 where
     Rsp: TryFrom<Vec<u8>> + 'static,
 {
@@ -338,7 +338,7 @@ where
 fn wrap_data_payload(payload: &[u8], max_data_len: u32) -> std::io::Result<Vec<u8>> {
     let size = payload.len();
     if size > max_data_len as usize {
-        Err(std::io::Error::from(std::io::ErrorKind::InvalidData))?
+        Err(std::io::Error::from(ErrorKind::InvalidData))?
     }
     // type + payload size + payload + checksum
     let mut dat = Vec::with_capacity(1 + 4 + size + 4);

@@ -93,8 +93,8 @@ pub(crate) fn message_sender(
         while let Some(session_response) = receiver.next().await {
             if match session_response {
                 SessionResponse::Player(color, action) => match color {
-                    Color::Black => black.send(action).await.is_err(),
-                    Color::White => white.send(action).await.is_err(),
+                    Black => black.send(action).await.is_err(),
+                    White => white.send(action).await.is_err(),
                 },
                 SessionResponse::Game(cmd) => game.send(cmd).await.is_err(),
             } {

@@ -378,7 +378,7 @@ impl PlayerState {
             latest_field: [[State::E; 15]; 15],
         };
         // black first
-        if let Color::Black = my_color {
+        if let Black = my_color {
             PlayerState::now_my_turn(&mut new_state)
         }
         new_state

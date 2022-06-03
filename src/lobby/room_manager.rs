@@ -103,7 +103,7 @@ impl RoomManager {
         });
     }
 
-    // clearn rooms
+    // clean rooms
     async fn run_cleaner(&self, threshold: Duration) {
         let mut rooms = self.rooms.lock().await;
         let mut to_clean = Vec::new();
