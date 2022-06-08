@@ -29,15 +29,13 @@ fn main() {
         let mut cert = BufReader::new(File::open(cert).expect("cert not found"));
         let cert = certs(&mut cert).expect("bad cert file");
         let mut key = BufReader::new(File::open(key).expect("key not found"));
-        let key_try_1 = pkcs8_private_keys(&mut key);
+        let mut keys = Vec::new();
+        if let Ok(key) = pkcs8_private_keys(&mut key) {
+            keys.extend(key);
+        };
         key.seek(SeekFrom::Start(0)).expect("seek failure");
-        let key_try_2 = rsa_private_keys(&mut key);
-        let mut key = match (key_try_1, key_try_2) {
-            (Err(_), Err(_)) => {
-                panic!("failed to read key")
-            }
-            (Ok(key), _) => key,
-            (_, Ok(key)) => key,
+        if let Ok(key) = rsa_private_keys(&mut key) {
+            keys.extend(key);
         };
         let server_config = Arc::new(
             ServerConfig::builder()
@@ -45,7 +43,7 @@ fn main() {
                 .with_no_client_auth()
                 .with_single_cert(
                     cert.into_iter().map(|c| Certificate(c)).collect(),
-                    PrivateKey(key.pop().expect("empty private key")),
+                    PrivateKey(keys.pop().expect("empty private key")),
                 )
                 .expect("failed to build server config"),
         );
