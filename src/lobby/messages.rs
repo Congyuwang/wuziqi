@@ -1,6 +1,5 @@
 //! Implementation principles.
 //! - disconnection without clear exit signal is considered as disconnection.
-use crate::game::Color::{Black, White};
 use crate::game::{Color, FieldState, FieldStateNullable, SessionConfig};
 use crate::lobby::client_connection::ConnectionInitError;
 use crate::lobby::token::RoomToken;
@@ -209,6 +208,7 @@ mod test_encode_decode {
     use crate::game::State;
     use crate::FieldInner;
     use rand::thread_rng;
+    use crate::Color::{Black, White};
 
     fn assert_msg_eq(msg: Messages) {
         let decoded_msg =

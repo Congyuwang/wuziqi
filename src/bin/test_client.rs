@@ -1,16 +1,22 @@
 use anyhow::{Error, Result};
 use async_std::channel::Sender;
 use async_std::io::{stdin, BufReader, Stdin};
-use async_std::net::TcpStream;
+use async_std::net::{TcpStream};
 use async_std::task;
 use async_std::task::{block_on, JoinHandle};
 use futures::{join, AsyncBufReadExt, StreamExt};
 use log::{error, info, LevelFilter};
 use std::env;
-use std::net::SocketAddrV4;
+use std::fs::File;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 use wuziqi::{Color, Conn, Messages, Received, Responses, RoomState, RoomToken, SessionConfig};
+use futures_rustls;
+use futures_rustls::{TlsConnector, TlsStream};
+use rustls::{ClientConfig, OwnedTrustAnchor, RootCertStore};
+use rustls_pemfile::certs;
+use webpki_roots;
 
 const PING_INTERVAL: Option<Duration> = Some(Duration::from_secs(5));
 
@@ -23,23 +29,37 @@ fn main() {
 
 async fn run_client() -> Result<()> {
     let args: Vec<String> = env::args().collect();
-    if args.len() != 3 {
-        Err(Error::msg("usage: ./client {{user name}} {{server ipv4 address}}, example: ./client 巴巴托斯 127.0.0.1:8080"))?
+    if args.len() < 2 {
+        Err(Error::msg("usage: ./client {{server domain:port}} {{root_cert}}, example: ./client congyu-test.xyz:8080"))?
     } else {
-        match SocketAddrV4::from_str(&args[2]) {
-            Ok(addrs) => {
-                let conn = Conn::init(TcpStream::connect(addrs).await?, PING_INTERVAL, 512);
-                // login
-                let _ = conn
-                    .sender()
-                    .send(Messages::UserName(args[1].clone()))
-                    .await;
-                let handle1 = accept_input(stdin(), conn.sender().clone());
-                let handle2 = print_server_responses(conn);
-                join!(handle1, handle2);
-            }
-            Err(e) => Err(Error::msg(format!("bad ipv4 address: {}", e)))?,
+        let address = &args[1];
+        // let domain = domain.to_socket_addrs().await?.next().expect("failed to resolve domain");
+        let domain = address.splitn(2, ":").next().expect("failed to find domain");
+        let domain = rustls::ServerName::try_from(domain).expect("failed to read domain");
+        let mut root_certs = RootCertStore::empty();
+        root_certs.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.into_iter().map(|c|{
+            OwnedTrustAnchor::from_subject_spki_name_constraints(
+                c.subject,
+                c.spki,
+                c.name_constraints
+            )
+        }));
+        if args.len() == 3 {
+            let root_cert = &args[2];
+            let mut reader = std::io::BufReader::new(File::open(root_cert).expect("failed to open root cert"));
+            let cert = certs(&mut reader).expect("failed to read root cert");
+            root_certs.add_parsable_certificates(&cert);
         }
+        let config = Arc::new(ClientConfig::builder()
+            .with_safe_defaults()
+            .with_root_certificates(root_certs)
+            .with_no_client_auth());
+        let tls = TlsConnector::from(config);
+        let tls = TlsStream::Client(tls.connect(domain, TcpStream::connect(address).await?).await?);
+        let conn = Conn::init(tls, PING_INTERVAL, 512);
+        let handle1 = accept_input(stdin(), conn.sender().clone());
+        let handle2 = print_server_responses(conn);
+        join!(handle1, handle2);
     }
     Ok(())
 }
@@ -119,6 +139,30 @@ fn string_to_msg(msg: &str) -> Option<Messages> {
                 }
             },
         }
+    } else if msg.starts_with("login") {
+        let cmd: Vec<String> = msg.splitn(3, " ").map(|x| x.to_string()).collect();
+        if cmd.len() < 3 {
+            print_help();
+            None
+        } else {
+            Some(Messages::Login(cmd[1].clone(), cmd[2].clone()))
+        }
+    } else if msg.starts_with("register") {
+        let cmd: Vec<String> = msg.splitn(3, " ").map(|x| x.to_string()).collect();
+        if cmd.len() < 3 {
+            print_help();
+            None
+        } else {
+            Some(Messages::CreateAccount(cmd[1].clone(), cmd[2].clone()))
+        }
+    } else if msg.starts_with("update") {
+        let cmd: Vec<String> = msg.splitn(4, " ").map(|x| x.to_string()).collect();
+        if cmd.len() < 4 {
+            print_help();
+            None
+        } else {
+            Some(Messages::UpdateAccount(cmd[1].clone(), cmd[2].clone(), cmd[3].clone()))
+        }
     } else if msg.starts_with("quit room") {
         Some(Messages::QuitRoom)
     } else if msg.starts_with("ready") {
@@ -184,6 +228,9 @@ fn string_to_msg(msg: &str) -> Option<Messages> {
 fn print_help() {
     println!(
         "commands:\n\
+        - login name password\n\
+        - register name password\n\
+        - update name password\n\
         - to `player` `msg`\n\
         - new room\n\
         - search 'name'\n\
@@ -203,12 +250,12 @@ fn print_help() {
 
 fn rsp_to_string(rsp: Responses) -> String {
     match rsp {
-        Responses::LoginSuccess => "connection success".to_string(),
+        Responses::LoginSuccess(name) => format!("{} login success", name),
         Responses::ConnectionInitFailure(e) => {
             format!("connection init failure: {:?}", e)
         }
         Responses::RoomCreated(token) => {
-            format!("room created! token:\n{}", token)
+            format!("room created! token: {}", token)
         }
         Responses::JoinRoomSuccess(token, state) => match state {
             RoomState::Empty => {
@@ -273,7 +320,7 @@ fn rsp_to_string(rsp: Responses) -> String {
             format!("opponent disconnected")
         }
         Responses::GameSessionError(e) => {
-            format!("game session error{}", e)
+            format!("game session error {}", e)
         }
         Responses::ChatMessage(name, msg) => {
             format!("chat message from {}:\n>> {}", name, msg)
@@ -288,6 +335,21 @@ fn rsp_to_string(rsp: Responses) -> String {
                 list_str.extend(format!("    - {}", name).chars());
             }
             list_str
+        }
+        Responses::CreateAccountFailure(e) => {
+            format!("create account failure {:?}", e)
+        }
+        Responses::LoginFailure(e) => {
+            format!("login failure {:?}", e)
+        }
+        Responses::UpdateAccountFailure(e) => {
+            format!("update account failure {:?}", e)
+        }
+        Responses::CreateAccountSuccess(name, password) => {
+            format!("create account success ({}, {})", name, password)
+        }
+        Responses::UpdateAccountSuccess(name, password) => {
+            format!("update account success ({}, {})", name, password)
         }
     }
 }
