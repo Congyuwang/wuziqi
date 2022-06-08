@@ -126,6 +126,8 @@ pub enum Responses {
     /// when the other player gets `JoinRoomSuccess`
     /// the `String` is the username
     OpponentJoinRoom(String),
+    /// when I quit room
+    QuitRoomSuccess,
     /// when the other player `QuitRoom`
     OpponentQuitRoom,
     /// when the other player is `Ready`
@@ -158,6 +160,8 @@ pub enum Responses {
     GameEndDraw,
     /// Room score information (player1, player2)
     RoomScores((String, u16), (String, u16)),
+    /// when I quit game session
+    QuitGameSessionSuccess,
     /// opponent quit game session
     OpponentQuitGameSession,
     /// opponent exit game

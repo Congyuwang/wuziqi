@@ -103,8 +103,8 @@ pub enum UndoResponse {
 pub enum GameQuitResponse {
     /// broadcast to both players
     GameEnd(GameResult),
-    /// send to opponent
-    OpponentQuitSession(u64),
+    /// send to both players
+    PlayerQuitSession(u64),
     /// send to opponent
     OpponentExitGame(u64),
     /// send to opponent

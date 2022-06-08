@@ -365,5 +365,11 @@ fn rsp_to_string(rsp: Responses) -> String {
         Responses::UpdateAccountSuccess(name, password) => {
             format!("update account success ({}, {})", name, password)
         }
+        Responses::QuitRoomSuccess => {
+            format!("quit room success")
+        }
+        Responses::QuitGameSessionSuccess => {
+            format!("quit session success")
+        }
     }
 }

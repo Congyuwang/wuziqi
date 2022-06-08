@@ -47,13 +47,14 @@ pub(crate) async fn start_game_session(
         .sender()
         .send(Responses::GameStarted(White))
         .await;
-    let b_exit = connect_player_game(black_player, black_cmd, b_chat_r, &w_chat_s, Black);
-    let w_exit = connect_player_game(white_player, white_cmd, w_chat_r, &b_chat_s, White);
+    let b_exit = connect_player_game(black_player_id, black_player, black_cmd, b_chat_r, &w_chat_s, Black);
+    let w_exit = connect_player_game(white_player_id, white_player, white_cmd, w_chat_r, &b_chat_s, White);
     (b_exit.await, w_exit.await)
 }
 
 /// this function connects a `ClientConnection` with `Commands`.
 fn connect_player_game(
+    player_id: u64,
     player: ClientConnection,
     mut command: Commands,
     chat_receiver: Receiver<(String, String)>,
@@ -84,7 +85,7 @@ fn connect_player_game(
                     handle_command(cmd, &command, &player_name, &chat_sender).await
                 }
                 rsp = session.next() => {
-                    handle_session_response(rsp, &player_sender, color).await
+                    handle_session_response(player_id, rsp, &player_sender, color).await
                 }
             } as NextStep;
             match next_step {
@@ -147,6 +148,7 @@ async fn handle_command(
 
 // do not need to handle disconnection at sending message
 async fn handle_session_response(
+    my_id: u64,
     rsp: Option<PlayerResponse>,
     player_sender: &Sender<Responses>,
     color: Color,
@@ -206,8 +208,12 @@ async fn handle_session_response(
                                 NextStep::EnterLobby(PlayerResult::Draw)
                             }
                         },
-                        GameQuitResponse::OpponentQuitSession(_) => {
-                            let _ = player_sender.send(Responses::OpponentQuitGameSession).await;
+                        GameQuitResponse::PlayerQuitSession(id) => {
+                            if id == my_id {
+                                let _ = player_sender.send(Responses::QuitGameSessionSuccess).await;
+                            } else {
+                                let _ = player_sender.send(Responses::OpponentQuitGameSession).await;
+                            }
                             // enter lobby on opponent quit
                             NextStep::EnterLobby(PlayerResult::OpponentQuit)
                         }

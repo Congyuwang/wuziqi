@@ -250,6 +250,7 @@ impl RoomInner {
         let _ = self
             .send_response(pos.opponent(), Responses::OpponentQuitRoom)
             .await;
+        let _ = self.send_response(pos, Responses::QuitRoomSuccess).await;
         self.clear_score();
         let mut info = self.player_info_mut(pos).take()?;
         if let (None, None) = self.seats {

@@ -238,7 +238,11 @@ async fn on_player_quit(
 ) -> Result<()> {
     // the reason for player's quit action
     let quit_rsp = match quit_action {
-        PlayerQuitReason::QuitSession => GameQuitResponse::OpponentQuitSession(player_id),
+        PlayerQuitReason::QuitSession => {
+            let rsp = GameQuitResponse::PlayerQuitSession(player_id);
+            broadcast_to_players(SessionPlayerResponse::Quit(rsp), responses).await?;
+            return Ok(());
+        },
         PlayerQuitReason::Disconnected => GameQuitResponse::OpponentDisconnected(player_id),
         PlayerQuitReason::Error(e) => GameQuitResponse::OpponentError(player_id, e),
         PlayerQuitReason::ExitGame => GameQuitResponse::OpponentExitGame(player_id),
@@ -263,7 +267,7 @@ fn log_quit_response(game_id: u64, quit_rsp: GameQuitResponse) {
         GameQuitResponse::GameEnd(e) => {
             error!("game {} finished in error {}", game_id, e)
         }
-        GameQuitResponse::OpponentQuitSession(player_id) => {
+        GameQuitResponse::PlayerQuitSession(player_id) => {
             info!("player {} quit game {}", player_id, game_id)
         }
         GameQuitResponse::OpponentExitGame(player_id) => {
