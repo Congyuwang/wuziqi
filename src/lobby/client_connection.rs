@@ -5,9 +5,10 @@ use async_std::net::TcpStream;
 use async_std::prelude::Stream;
 use async_std::sync::Mutex;
 use async_std::task::block_on;
+use bincode::{Decode, Encode};
 use futures::StreamExt;
+use futures_rustls::{TlsAcceptor, TlsStream};
 use log::{error, info};
-use serde::{Deserialize, Serialize};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -18,13 +19,14 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 const PING_INTERVAL: Duration = Duration::from_secs(5);
-const MAX_DATA_SIZE: u32 = 1024;
-const SINGLE_IP_MAX_CONN: u32 = 16;
+const MAX_DATA_SIZE: u32 = 1024 * 1024 * 20;
+const SINGLE_IP_MAX_CONN: u32 = 64;
 const MAX_USER_NAME_BYTES: usize = 32;
 const MAX_PLAYER_SEARCH_RESULT_COUNT: usize = 20;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum ConnectionInitError {
+    TlsError,
     IpMaxConnExceed,
     ConnectionClosed,
     UserNameNotReceived,
@@ -52,11 +54,12 @@ pub struct ClientConnection {
 impl ClientConnection {
     pub async fn init(
         tcp: TcpStream,
+        acceptor: TlsAcceptor,
         socket_address: SocketAddr,
         connection_stats: Arc<Mutex<ConnectionStats>>,
         name_dict: Arc<Mutex<HashMap<String, Sender<Responses>>>>,
-    ) -> Result<Self, (ConnectionInitError, Conn<Responses, Messages>)> {
-        // add connection
+    ) -> Result<Self, (ConnectionInitError, Option<Conn<Responses, Messages>>)> {
+        // add connection, check if ip max connection number exceeded
         let player_id = match connection_stats
             .lock()
             .await
@@ -64,30 +67,45 @@ impl ClientConnection {
         {
             Ok(id) => id,
             Err(e) => {
-                let inner = Conn::init(tcp, Some(PING_INTERVAL), MAX_DATA_SIZE);
-                return Err((e, inner));
+                return if let Ok(tls) = acceptor.accept(tcp).await {
+                    let tls = TlsStream::Server(tls);
+                    let inner = Conn::init(tls, Some(PING_INTERVAL), MAX_DATA_SIZE);
+                    Err((e, Some(inner)))
+                } else {
+                    Err((e, None))
+                };
             }
         };
-        let mut inner = Conn::init(tcp, Some(PING_INTERVAL), MAX_DATA_SIZE);
+        let tls = TlsStream::Server(match acceptor.accept(tcp).await {
+            Ok(tls) => tls,
+            Err(e) => return Err((ConnectionInitError::TlsError, None)),
+        });
+        let mut inner = Conn::init(tls, Some(PING_INTERVAL), MAX_DATA_SIZE);
         let player_name = loop {
             match inner.next().await {
-                None => return Err((ConnectionInitError::ConnectionClosed, inner)),
+                None => return Err((ConnectionInitError::ConnectionClosed, Some(inner))),
                 Some(msg) => {
                     match msg {
                         Received::Response(msg) => match msg {
-                            Messages::UserName(name) => {
+                            Messages::Login(name, password) => {
                                 if name.len() > MAX_USER_NAME_BYTES {
-                                    return Err((ConnectionInitError::UserNameTooLong, inner));
+                                    return Err((
+                                        ConnectionInitError::UserNameTooLong,
+                                        Some(inner),
+                                    ));
                                 } else {
                                     if name.is_empty() | name.contains("\n") {
-                                        return Err((ConnectionInitError::InvalidUserName, inner));
+                                        return Err((
+                                            ConnectionInitError::InvalidUserName,
+                                            Some(inner),
+                                        ));
                                     } else {
                                         let mut name_dict = name_dict.lock().await;
                                         match name_dict.entry(name) {
                                             Entry::Occupied(_) => {
                                                 return Err((
                                                     ConnectionInitError::UserNameExists,
-                                                    inner,
+                                                    Some(inner),
                                                 ));
                                             }
                                             Entry::Vacant(v) => {
@@ -99,23 +117,28 @@ impl ClientConnection {
                                     }
                                 }
                             }
-                            _ => return Err((ConnectionInitError::UserNameNotReceived, inner)),
+                            _ => {
+                                return Err((ConnectionInitError::UserNameNotReceived, Some(inner)))
+                            }
                         },
                         Received::Ping => {
                             // jump over Ping
                         }
                         Received::Error(e) => {
-                            return Err((ConnectionInitError::NetworkError(e), inner))
+                            return Err((ConnectionInitError::NetworkError(e), Some(inner)))
                         }
                         Received::RemoteError(e) => {
-                            return Err((ConnectionInitError::NetworkError(e), inner))
+                            return Err((ConnectionInitError::NetworkError(e), Some(inner)))
                         }
                     }
                 }
             }
         };
         info!("player {player_id}: {player_name} connected to server from {socket_address}");
-        let _ = inner.sender().send(Responses::ConnectionSuccess).await;
+        let _ = inner
+            .sender()
+            .send(Responses::LoginSuccess(player_name.clone()))
+            .await;
         Ok(ClientConnection {
             inner,
             player_name,

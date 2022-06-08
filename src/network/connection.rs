@@ -35,9 +35,14 @@ use async_std::io::BufReader;
 use async_std::net::TcpStream;
 use async_std::prelude::Stream;
 use async_std::task;
+use async_std::task::JoinHandle;
+use bincode::{Decode, Encode};
 use crc32fast::hash as checksum;
-use futures::{AsyncWriteExt, StreamExt};
-use serde::{Deserialize, Serialize};
+use futures::channel::oneshot;
+use futures::io::{ReadHalf, WriteHalf};
+use futures::{select, AsyncWriteExt, StreamExt};
+use futures::{AsyncReadExt, FutureExt};
+use futures_rustls::TlsStream;
 use std::fmt::{Debug, Display, Formatter};
 use std::io::ErrorKind;
 use std::net::Shutdown;
@@ -52,7 +57,7 @@ const NET_CHANNEL_SIZE: usize = 20;
 /// The first type parameter is the type of messages sent,
 /// the second type parameter is the type of responses received.
 ///
-/// dropping this struct will close the connection
+/// dropping this struct and all senders will close the connection
 pub struct Conn<Msg, Rsp> {
     sender: Sender<Msg>,
     receiver: Receiver<Received<Rsp>>,
@@ -63,8 +68,12 @@ where
     Msg: Send + 'static + Into<Vec<u8>>,
     Rsp: Send + 'static + TryFrom<Vec<u8>>,
 {
-    pub fn init(tcp: TcpStream, ping_interval: Option<Duration>, max_data_size: u32) -> Self {
-        handle_connection(tcp, ping_interval, max_data_size)
+    pub fn init(
+        tls: TlsStream<TcpStream>,
+        ping_interval: Option<Duration>,
+        max_data_size: u32,
+    ) -> Self {
+        handle_connection(tls, ping_interval, max_data_size)
     }
 
     pub fn sender(&self) -> &Sender<Msg> {
@@ -92,7 +101,7 @@ pub enum Received<T> {
     RemoteError(ConnectionError),
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum ConnectionError {
     /// Attempting to send or receive over-sized data payload
     MaxDataLengthExceeded,
@@ -119,7 +128,7 @@ impl Display for ConnectionError {
 }
 
 fn handle_connection<Msg, Rsp>(
-    tcp: TcpStream,
+    tls: TlsStream<TcpStream>,
     ping_interval: Option<Duration>,
     max_data_size: u32,
 ) -> Conn<Msg, Rsp>
@@ -127,13 +136,83 @@ where
     Msg: Send + 'static + Into<Vec<u8>>,
     Rsp: Send + 'static + TryFrom<Vec<u8>>,
 {
-    let (msg_sender, msg_receiver) = bounded(NET_CHANNEL_SIZE);
+    let (msg_sender, mut inner_msg_receiver) = bounded(NET_CHANNEL_SIZE);
+    let (inner_msg_sender, msg_receiver) = bounded(NET_CHANNEL_SIZE);
     let (rsp_sender, rsp_receiver) = bounded(NET_CHANNEL_SIZE);
+    let inner_ping_sender = inner_msg_sender.clone();
+    let (read_tls, write_tls) = tls.split();
+    // define three stoppers for stopping three tasks
+    let (ping_stopper, stop_pinging) = oneshot::channel::<()>();
+    let (send_stopper, stop_sending) = oneshot::channel::<()>();
+    let (recv_stopper, stop_receiving) = oneshot::channel::<()>();
+    task::spawn(async move {
+        // wrap messages from `msg_sender` with `MessageType::Data`
+        while let Some(msg) = inner_msg_receiver.next().await {
+            if inner_msg_sender.send(MessageType::Data(msg)).await.is_err() {
+                break;
+            }
+        }
+        ping_stopper.send(())
+    });
+    // start pinging task
     if let Some(ping_interval) = ping_interval {
-        send_ping::<Msg>(&tcp, ping_interval);
+        send_ping::<Msg>(inner_ping_sender, stop_pinging, ping_interval);
     }
-    send_messages(&tcp, msg_receiver, max_data_size);
-    retrieve_messages::<Msg, Rsp>(&tcp, rsp_sender, max_data_size);
+    // start messages sender loop
+    let send_joiner = send_messages::<Msg>(write_tls, msg_receiver, stop_sending, max_data_size);
+    // start messages receiver loop
+    let receive_joiner =
+        retrieve_messages::<Msg, Rsp>(read_tls, rsp_sender, stop_receiving, max_data_size);
+    // deal with connection shutdown
+    task::spawn(async move {
+        let mut recv_stopper = Some(recv_stopper);
+        let mut send_stopper = Some(send_stopper);
+        let mut send_joiner = send_joiner.fuse();
+        let mut receive_joiner = receive_joiner.fuse();
+        let (mut write_half, mut wr_err) = (None, None);
+        let (mut read_half, mut r_err) = (None, None);
+        // gracefully shutdown tls connections (send error messages and so on)
+        loop {
+            select! {
+                send_result = send_joiner => {
+                    let (mut wr, shut, err) = send_result;
+                    match shut {
+                        Some(Shutdown::Both) => {
+                            if let Some(stp) = recv_stopper.take() {
+                                let _ = stp.send(());
+                            }
+                        }
+                        Some(Shutdown::Write) => {
+                            let _ = wr.close().await;
+                        }
+                        _ => {}
+                    }
+                    // do not need to do anything specific
+                    (write_half, wr_err) = (Some(wr), err);
+                }
+                receive_result = receive_joiner => {
+                    let (rr, shut, err) = receive_result;
+                    if let Some(Shutdown::Both) = shut {
+                        if let Some(stp) = send_stopper.take() {
+                            let _ = stp.send(());
+                        }
+                    }
+                    (read_half, r_err) = (Some(rr), err);
+                }
+            }
+            if let (Some(_), Some(_)) = (&write_half, &read_half) {
+                break;
+            }
+        }
+        let (mut write_half, _) = (write_half.unwrap(), read_half.unwrap());
+        if let Some(e) = wr_err {
+            let _ = write_msg(&mut write_half, MessageType::Error::<Msg>(e), u32::MAX).await;
+        }
+        if let Some(e) = r_err {
+            let _ = write_msg(&mut write_half, MessageType::Error::<Msg>(e), u32::MAX).await;
+        }
+        let _ = write_half.close().await;
+    });
     Conn {
         sender: msg_sender,
         receiver: rsp_receiver,
@@ -151,96 +230,128 @@ const DATA: u8 = 0;
 const PING: u8 = 100;
 const ERROR: u8 = 200;
 
-/// This function takes the ownership of the only instance of `Sender<Rsp>`.
-///
-/// Dropping the receiver of responses closes the *both* sides of the connection.
+/// This task returns in three possible ways:
+/// - the receiver of the retrieved message is dropped: shutdown read
+/// - remote write closed (eof read): shutdown read
+/// - data decode error: shutdown both sides
 fn retrieve_messages<Msg, Rsp>(
-    tcp: &TcpStream,
+    read_tls: ReadHalf<TlsStream<TcpStream>>,
     rsp_sender: Sender<Received<Rsp>>,
+    stop_receiving: oneshot::Receiver<()>,
     max_data_size: u32,
-) where
+) -> JoinHandle<(
+    ReadHalf<TlsStream<TcpStream>>,
+    Option<Shutdown>,
+    Option<ConnectionError>,
+)>
+where
     Msg: Send + 'static + Into<Vec<u8>>,
     Rsp: Send + 'static + TryFrom<Vec<u8>>,
 {
-    let mut tcp = tcp.clone();
-    let inner = tcp.clone();
     task::spawn(async move {
-        let mut reader = BufReader::new(inner);
-        loop {
-            match read_rsp::<Rsp>(&mut reader, max_data_size).await {
-                Ok(Some(rsp)) => {
-                    // if receiver got dropped, allow sender to send
-                    if rsp_sender.send(rsp).await.is_err() {
-                        let _ = tcp.shutdown(Shutdown::Read);
-                        break;
+        let mut reader = BufReader::new(read_tls);
+        let mut stop_receiving = stop_receiving.fuse();
+        let (shut, err) = loop {
+            select! {
+                _ = stop_receiving => {
+                    break (None, None);
+                }
+                read = read_rsp::<Rsp>(&mut reader, max_data_size).fuse() => {
+                    match read {
+                        Ok(Some(rsp)) => {
+                            // if receiver got dropped, allow sender to send
+                            if rsp_sender.send(rsp).await.is_err() {
+                                break (Some(Shutdown::Read), None);
+                            }
+                        }
+                        // no more message to read (might be due to io error or connection close)
+                        Ok(None) => {
+                            // allow sender to send
+                            break (Some(Shutdown::Read), None);
+                        }
+                        // read message got error
+                        Err(e) => {
+                            let _ = rsp_sender.send(Received::Error(e.clone())).await;
+                            break (Some(Shutdown::Both), Some(e));
+                        }
                     }
                 }
-                // no more message to read
-                Ok(None) => {
-                    // allow sender to send
-                    let _ = tcp.shutdown(Shutdown::Read);
-                    break;
-                }
-                // read message got error
-                Err(e) => {
-                    let _ = rsp_sender.send(Received::Error(e.clone())).await;
-                    let _ = write_msg::<Msg>(&mut tcp, MessageType::Error(e), 0).await;
-                    let _ = tcp.shutdown(Shutdown::Both);
-                    break;
-                }
             }
-        }
-    });
+        };
+        (reader.into_inner(), shut, err)
+    })
 }
 
 /// This function takes the ownership of `Receiver<Msg>`.
 ///
-/// ## Closing Connection:
-/// Drop all instances of `Sender<Msg>`, and this function will close the
-/// *write* side of TCP connection.
-///
-/// ## Error Handling:
-/// On write error, this function closes *both* sides of the connection,
-/// and drops `Receiver<Msg>`.
-fn send_messages<Msg>(tcp: &TcpStream, mut msg_receiver: Receiver<Msg>, max_data_size: u32)
+/// send_messages finishes in three different situations:
+/// - all `Senders` of messages being dropped: shutdown write
+/// - send data larger than limit: shutdown both
+/// - remote disconnection (write failure): shutdown both
+fn send_messages<Msg>(
+    mut write_tls: WriteHalf<TlsStream<TcpStream>>,
+    msg_receiver: Receiver<MessageType<Msg>>,
+    stop_sending: oneshot::Receiver<()>,
+    max_data_size: u32,
+) -> JoinHandle<(
+    WriteHalf<TlsStream<TcpStream>>,
+    Option<Shutdown>,
+    Option<ConnectionError>,
+)>
 where
     Msg: Send + 'static + Into<Vec<u8>>,
 {
-    let mut tcp = tcp.clone();
     task::spawn(async move {
-        while let Some(msg) = msg_receiver.next().await {
-            let write_result =
-                write_msg(&mut tcp, MessageType::Data::<Msg>(msg), max_data_size).await;
-            if let Err(e) = write_result {
-                match e.kind() {
-                    ErrorKind::InvalidData => {}
-                    _ => {
-                        let _ = tcp.shutdown(Shutdown::Both);
-                        return;
+        let mut stop_sending = stop_sending.fuse();
+        let mut msg_receiver = msg_receiver.fuse();
+        loop {
+            select! {
+                _ = stop_sending => {
+                    break (write_tls, None, None)
+                }
+                msg = msg_receiver.next() => {
+                    if let Some(msg) = msg {
+                        let write_result = write_msg(&mut write_tls, msg, max_data_size).await;
+                        if let Err(e) = write_result {
+                            break match e.kind() {
+                                ErrorKind::InvalidData => (
+                                    write_tls,
+                                    Some(Shutdown::Both),
+                                    Some(ConnectionError::MaxDataLengthExceeded),
+                                ),
+                                // pinging disconnection
+                                _ => (write_tls, Some(Shutdown::Both), None),
+                            };
+                        }
+                    } else {
+                        break (write_tls, Some(Shutdown::Write), None)
                     }
                 }
             }
         }
-        let _ = tcp.shutdown(Shutdown::Both);
-    });
+    })
 }
 
-/// Check if tcp connection is still alive by pinging,
-/// shutdown connection pinging fail.
-fn send_ping<Msg>(tcp: &TcpStream, ping_interval: Duration)
-where
+fn send_ping<Msg>(
+    ping_sender: Sender<MessageType<Msg>>,
+    stop_pinging: oneshot::Receiver<()>,
+    ping_interval: Duration,
+) where
     Msg: Into<Vec<u8>> + Send + 'static,
 {
-    let mut tcp = tcp.clone();
     task::spawn(async move {
+        let mut stop_pinging = stop_pinging.fuse();
+        let mut ping_sleeper = Box::pin(task::sleep(ping_interval).fuse());
         loop {
-            task::sleep(ping_interval).await;
-            if write_msg(&mut tcp, MessageType::Ping::<Msg>, 0)
-                .await
-                .is_err()
-            {
-                let _ = tcp.shutdown(Shutdown::Both);
-                break;
+            select! {
+                _ = stop_pinging => break Ok(()),
+                _ = ping_sleeper => {
+                    if ping_sender.send(MessageType::Ping).await.is_err() {
+                        break Err(());
+                    } else {
+                        ping_sleeper = Box::pin(task::sleep(ping_interval).fuse());
+                    }
+                }
             }
         }
     });
@@ -256,7 +367,7 @@ where
 /// - UnknownMessageType: message type byte does not match
 ///
 async fn read_rsp<Rsp>(
-    reader: &mut BufReader<TcpStream>,
+    reader: &mut BufReader<ReadHalf<TlsStream<TcpStream>>>,
     max_data_size: u32,
 ) -> Result<Option<Received<Rsp>>, ConnectionError>
 where
@@ -273,7 +384,7 @@ where
                 Some(s) => s,
             };
             if size > max_data_size {
-                Err(ConnectionError::MaxDataLengthExceeded)?
+                return Err(ConnectionError::MaxDataLengthExceeded);
             }
             let pay_load = match utility::read_n_bytes(reader, size).await {
                 None => return Ok(None),
@@ -311,7 +422,7 @@ where
 /// On write error, return `WriteZero`.
 /// If payload too large, return `InvalidData`.
 async fn write_msg<Msg>(
-    tcp: &mut TcpStream,
+    tls: &mut WriteHalf<TlsStream<TcpStream>>,
     msg: MessageType<Msg>,
     max_data_size: u32,
 ) -> std::io::Result<()>
@@ -321,13 +432,18 @@ where
     match msg {
         MessageType::Data(msg) => {
             let bytes = wrap_data_payload(&msg.into(), max_data_size)?;
-            tcp.write_all(&bytes).await
+            tls.write_all(&bytes).await?;
+            tls.flush().await
         }
         MessageType::Error(e) => {
             let err_code = [ERROR, e.error_code()];
-            tcp.write_all(&err_code).await
+            tls.write_all(&err_code).await?;
+            tls.flush().await
         }
-        MessageType::Ping => tcp.write_all(&[PING]).await,
+        MessageType::Ping => {
+            tls.write_all(&[PING]).await?;
+            tls.flush().await
+        }
     }
 }
 
@@ -394,9 +510,17 @@ mod test_network_module {
     use async_std::task;
     use futures::executor::block_on;
     use futures::StreamExt;
+    use futures_rustls::TlsAcceptor;
+    use futures_rustls::{TlsConnector, TlsStream};
+    use lazy_static::lazy_static;
     use rand::random;
+    use rustls::{Certificate, ClientConfig, PrivateKey, RootCertStore, ServerConfig, ServerName};
+    use rustls_pemfile::{certs, pkcs8_private_keys};
+    use std::fs::File;
+    use std::io::BufReader;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
     use std::ops::Deref;
+    use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration;
     use std::vec;
@@ -418,18 +542,78 @@ mod test_network_module {
         SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port))
     }
 
-    fn start_server(port: u16) -> Receiver<(TcpStream, SocketAddr)> {
+    fn test_domain() -> &'static str {
+        "localhost"
+    }
+
+    fn test_cert_folder() -> PathBuf {
+        let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        d.push("test-certs");
+        d
+    }
+
+    fn server_config() -> Arc<ServerConfig> {
+        let mut cert_path = test_cert_folder();
+        let mut key_path = test_cert_folder();
+        cert_path.push("end.cert");
+        key_path.push("end.rsa");
+        let mut cert_reader = BufReader::new(File::open(cert_path).unwrap());
+        let mut key_reader = BufReader::new(File::open(key_path).unwrap());
+        let cert: Vec<Certificate> = certs(&mut cert_reader)
+            .unwrap()
+            .into_iter()
+            .map(|v| Certificate(v))
+            .collect();
+        let key = PrivateKey(pkcs8_private_keys(&mut key_reader).unwrap().pop().unwrap());
+        let config = ServerConfig::builder()
+            .with_safe_defaults()
+            .with_no_client_auth()
+            .with_single_cert(cert, key)
+            .unwrap();
+        Arc::new(config)
+    }
+
+    fn client_config() -> Arc<ClientConfig> {
+        let mut chain_path = test_cert_folder();
+        chain_path.push("end.chain");
+        let mut chain_reader = BufReader::new(File::open(chain_path).unwrap());
+        let mut root_certs = RootCertStore::empty();
+        root_certs.add_parsable_certificates(&certs(&mut chain_reader).unwrap());
+        let config = ClientConfig::builder()
+            .with_safe_defaults()
+            .with_root_certificates(root_certs)
+            .with_no_client_auth();
+        Arc::new(config)
+    }
+
+    lazy_static! {
+        static ref SERVER_CONFIG: Arc<ServerConfig> = server_config();
+        static ref CLIENT_CONFIG: Arc<ClientConfig> = client_config();
+    }
+
+    fn start_server(port: u16) -> Receiver<(TlsStream<TcpStream>, SocketAddr)> {
         let (s, conn_receiver) = bounded(1);
+        let acceptor = TlsAcceptor::from(SERVER_CONFIG.clone());
         task::spawn(async move {
             let server = TcpListener::bind(test_address(port)).await.unwrap();
             loop {
-                let conn = server.accept().await.unwrap();
-                if s.send(conn).await.is_err() {
+                let (tcp, sock) = server.accept().await.unwrap();
+                let tls = acceptor.accept(tcp).await.unwrap();
+                if s.send((TlsStream::Server(tls), sock)).await.is_err() {
                     break;
                 }
             }
         });
         conn_receiver
+    }
+
+    async fn client_tls(tcp: TcpStream) -> TlsStream<TcpStream> {
+        let connector = TlsConnector::from(CLIENT_CONFIG.clone());
+        let tls = connector
+            .connect(ServerName::try_from(test_domain()).unwrap(), tcp)
+            .await
+            .unwrap();
+        TlsStream::Client(tls)
     }
 
     fn gen_rand_bytes(number: u16, length: u8) -> Vec<Vec<u8>> {
@@ -451,24 +635,25 @@ mod test_network_module {
         let rand_bytes_clone = rand_bytes.clone();
 
         // send bytes from server
-        task::spawn(async move {
-            let (tcp, _) = conn.next().await.unwrap();
+        let server_life = task::spawn(async move {
+            let (tls, _) = conn.next().await.unwrap();
             let server: Conn<Vec<u8>, Vec<u8>> =
-                handle_connection(tcp, Some(Duration::from_millis(10)), 128);
+                handle_connection(tls, Some(Duration::from_millis(10)), 128);
             for bytes in rand_bytes_clone.iter() {
                 task::sleep(Duration::from_millis(10)).await;
-                server.sender.send(bytes.clone()).await.unwrap();
+                server.sender().send(bytes.clone()).await.unwrap();
             }
+            server
         });
 
         // receive bytes from client
-        let tcp = block_on(async move {
+        let tls = block_on(async move {
             task::sleep(Duration::from_millis(100)).await;
-            TcpStream::connect(test_address(8889)).await
-        })
-        .unwrap();
+            let tcp = TcpStream::connect(test_address(8889)).await.unwrap();
+            client_tls(tcp).await
+        });
         let mut client: Conn<Vec<u8>, Vec<u8>> =
-            handle_connection(tcp, Some(Duration::from_millis(10)), 128);
+            handle_connection(tls, Some(Duration::from_millis(10)), 128);
         let responses = block_on(async move {
             let mut responses: Vec<Vec<u8>> = Vec::with_capacity(100);
             while let Some(b) = client.next().await {
@@ -477,9 +662,14 @@ mod test_network_module {
                     Received::Ping => {}
                     _ => panic!("error receiving message"),
                 }
+                if responses.len() >= 100 {
+                    break;
+                }
             }
             responses
         });
+
+        drop(server_life);
 
         assert_eq!(rand_bytes.deref(), &responses)
     }
@@ -498,12 +688,12 @@ mod test_network_module {
         });
 
         // receive bytes from client
-        let tcp = block_on(async move {
+        let tls = block_on(async move {
             task::sleep(Duration::from_millis(100)).await;
-            TcpStream::connect(test_address(8888)).await
-        })
-        .unwrap();
-        let client: Conn<Vec<u8>, Vec<u8>> = handle_connection(tcp, None, 128);
+            let tcp = TcpStream::connect(test_address(8888)).await.unwrap();
+            client_tls(tcp).await
+        });
+        let client: Conn<Vec<u8>, Vec<u8>> = handle_connection(tls, None, 128);
         task::spawn(async move {
             for bytes in rand_bytes_clone.iter() {
                 client.sender().send(bytes.clone()).await.unwrap();
@@ -538,13 +728,13 @@ mod test_network_module {
             server
         });
 
-        // receive bytes from client
-        let tcp = block_on(async move {
+        let tls = block_on(async move {
             task::sleep(Duration::from_millis(100)).await;
-            TcpStream::connect(test_address(port)).await
-        })
-        .unwrap();
-        let mut client: Conn<Vec<u8>, NotEmpty> = handle_connection(tcp, None, 128);
+            let tcp = TcpStream::connect(test_address(port)).await.unwrap();
+            client_tls(tcp).await
+        });
+
+        let mut client: Conn<Vec<u8>, NotEmpty> = handle_connection(tls, None, 128);
         let responses = block_on(async move {
             let mut responses: Vec<Received<NotEmpty>> = Vec::with_capacity(100);
             while let Some(b) = client.next().await {
