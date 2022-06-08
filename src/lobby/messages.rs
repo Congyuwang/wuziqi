@@ -89,6 +89,7 @@ pub enum LoginFailure {
     BadInput(InvalidAccountPassword),
     AccountDoesNotExist,
     PasswordIncorrect,
+    AlreadyLoggedIn,
     ServerError,
 }
 

@@ -106,7 +106,21 @@ impl ClientConnection {
                                     }
                                     Ok(info) => {
                                         if info.password.deref().eq(&password) {
-                                            break (name, info.user_id);
+                                            if name_dict.lock().await.contains_key(&name) {
+                                                if inner
+                                                    .sender()
+                                                    .send(Responses::LoginFailure(LoginFailure::AlreadyLoggedIn))
+                                                    .await
+                                                    .is_err()
+                                                {
+                                                    return Err((
+                                                        ConnectionInitError::ConnectionClosed,
+                                                        Some(inner),
+                                                    ));
+                                                }
+                                            } else {
+                                                break (name, info.user_id);
+                                            }
                                         } else {
                                             if inner
                                                 .sender()
