@@ -1,4 +1,4 @@
-use crate::lobby::messages::{LoginFailure, Messages, Responses};
+use crate::lobby::messages::{CreateAccountFailure, LoginFailure, Messages, Responses};
 use crate::lobby::user_db::{LoginValidator, Password};
 use crate::network::connection::{Conn, ConnectionError, Received};
 use async_std::channel::Sender;
@@ -194,7 +194,21 @@ impl ClientConnection {
                                                 Some(inner),
                                             ));
                                         }
-                                        break (name, user_id);
+                                        if name_dict.lock().await.contains_key(&name) {
+                                            if inner
+                                                .sender()
+                                                .send(Responses::CreateAccountFailure(CreateAccountFailure::AlreadyLoggedIn))
+                                                .await
+                                                .is_err()
+                                            {
+                                                return Err((
+                                                    ConnectionInitError::ConnectionClosed,
+                                                    Some(inner),
+                                                ));
+                                            }
+                                        } else {
+                                            break (name, user_id);
+                                        }
                                     }
                                     Err(e) => {
                                         if inner

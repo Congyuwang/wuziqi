@@ -74,6 +74,7 @@ pub enum CreateAccountFailure {
     BadInput(InvalidAccountPassword),
     AccountAlreadyExist,
     ServerError,
+    AlreadyLoggedIn,
 }
 
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
