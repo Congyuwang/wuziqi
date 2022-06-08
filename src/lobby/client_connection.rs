@@ -1,4 +1,4 @@
-use crate::lobby::messages::{Messages, Responses};
+use crate::lobby::messages::{LoginFailure, Messages, Responses};
 use crate::lobby::user_db::{LoginValidator, Password};
 use crate::network::connection::{Conn, ConnectionError, Received};
 use async_std::channel::Sender;
@@ -107,6 +107,18 @@ impl ClientConnection {
                                     Ok(info) => {
                                         if info.password.deref().eq(&password) {
                                             break (name, info.user_id);
+                                        } else {
+                                            if inner
+                                                .sender()
+                                                .send(Responses::LoginFailure(LoginFailure::PasswordIncorrect))
+                                                .await
+                                                .is_err()
+                                            {
+                                                return Err((
+                                                    ConnectionInitError::ConnectionClosed,
+                                                    Some(inner),
+                                                ));
+                                            }
                                         }
                                     }
                                 }
