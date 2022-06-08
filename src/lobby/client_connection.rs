@@ -196,11 +196,12 @@ impl ClientConnection {
                 }
             }
         };
-        info!("player {player_id}: {player_name} enters room");
+        info!("player {player_id}: {player_name} login success");
         let _ = inner
             .sender()
             .send(Responses::LoginSuccess(player_name.clone()))
             .await;
+        name_dict.lock().await.insert(player_name.clone(), inner.sender().clone());
         Ok(ClientConnection {
             inner,
             player_name,
