@@ -5,7 +5,7 @@ use rustls::{Certificate, PrivateKey, ServerConfig};
 use rustls_pemfile::{certs, pkcs8_private_keys, rsa_private_keys};
 use std::env;
 use std::fs::File;
-use std::io::{BufReader, Seek, SeekFrom};
+use std::io::{BufReader, Error, Seek, SeekFrom};
 use std::net::SocketAddrV4;
 use std::path::Path;
 use std::str::FromStr;
