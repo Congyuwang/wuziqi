@@ -1,22 +1,22 @@
 use anyhow::{Error, Result};
 use async_std::channel::Sender;
 use async_std::io::{stdin, BufReader, Stdin};
-use async_std::net::{TcpStream};
+use async_std::net::TcpStream;
 use async_std::task;
 use async_std::task::{block_on, JoinHandle};
 use futures::{join, AsyncBufReadExt, StreamExt};
-use log::{error, info, LevelFilter};
+use futures_rustls;
+use futures_rustls::{TlsConnector, TlsStream};
+use log::{error, info, LevelFilter, warn};
+use rustls::{ClientConfig, OwnedTrustAnchor, RootCertStore};
+use rustls_pemfile::certs;
 use std::env;
 use std::fs::File;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use wuziqi::{Color, Conn, Messages, Received, Responses, RoomState, RoomToken, SessionConfig};
-use futures_rustls;
-use futures_rustls::{TlsConnector, TlsStream};
-use rustls::{ClientConfig, OwnedTrustAnchor, RootCertStore};
-use rustls_pemfile::certs;
 use webpki_roots;
+use wuziqi::{Color, Conn, Messages, Received, Responses, RoomState, RoomToken, SessionConfig};
 
 const PING_INTERVAL: Option<Duration> = Some(Duration::from_secs(5));
 
@@ -34,28 +34,39 @@ async fn run_client() -> Result<()> {
     } else {
         let address = &args[1];
         // let domain = domain.to_socket_addrs().await?.next().expect("failed to resolve domain");
-        let domain = address.splitn(2, ":").next().expect("failed to find domain");
+        let domain = address
+            .splitn(2, ":")
+            .next()
+            .expect("failed to find domain");
         let domain = rustls::ServerName::try_from(domain).expect("failed to read domain");
         let mut root_certs = RootCertStore::empty();
-        root_certs.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.into_iter().map(|c|{
-            OwnedTrustAnchor::from_subject_spki_name_constraints(
-                c.subject,
-                c.spki,
-                c.name_constraints
-            )
-        }));
+        root_certs.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.into_iter().map(
+            |c| {
+                OwnedTrustAnchor::from_subject_spki_name_constraints(
+                    c.subject,
+                    c.spki,
+                    c.name_constraints,
+                )
+            },
+        ));
         if args.len() == 3 {
             let root_cert = &args[2];
-            let mut reader = std::io::BufReader::new(File::open(root_cert).expect("failed to open root cert"));
+            let mut reader =
+                std::io::BufReader::new(File::open(root_cert).expect("failed to open root cert"));
             let cert = certs(&mut reader).expect("failed to read root cert");
             root_certs.add_parsable_certificates(&cert);
         }
-        let config = Arc::new(ClientConfig::builder()
-            .with_safe_defaults()
-            .with_root_certificates(root_certs)
-            .with_no_client_auth());
+        let config = Arc::new(
+            ClientConfig::builder()
+                .with_safe_defaults()
+                .with_root_certificates(root_certs)
+                .with_no_client_auth(),
+        );
         let tls = TlsConnector::from(config);
-        let tls = TlsStream::Client(tls.connect(domain, TcpStream::connect(address).await?).await?);
+        let tls = TlsStream::Client(
+            tls.connect(domain, TcpStream::connect(address).await?)
+                .await?,
+        );
         let conn = Conn::init(tls, PING_INTERVAL, 512);
         let handle1 = accept_input(stdin(), conn.sender().clone());
         let handle2 = print_server_responses(conn);
@@ -87,8 +98,7 @@ fn accept_input(input: Stdin, sender: Sender<Messages>) -> JoinHandle<()> {
                     }
                 }
                 Err(e) => {
-                    error!("error: {}", e);
-                    break;
+                    warn!("read line error: {}", e);
                 }
             }
         }
@@ -161,7 +171,11 @@ fn string_to_msg(msg: &str) -> Option<Messages> {
             print_help();
             None
         } else {
-            Some(Messages::UpdateAccount(cmd[1].clone(), cmd[2].clone(), cmd[3].clone()))
+            Some(Messages::UpdateAccount(
+                cmd[1].clone(),
+                cmd[2].clone(),
+                cmd[3].clone(),
+            ))
         }
     } else if msg.starts_with("quit room") {
         Some(Messages::QuitRoom)

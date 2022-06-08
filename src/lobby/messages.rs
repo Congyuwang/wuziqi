@@ -206,9 +206,9 @@ impl TryFrom<Vec<u8>> for Responses {
 mod test_encode_decode {
     use super::*;
     use crate::game::State;
+    use crate::Color::{Black, White};
     use crate::FieldInner;
     use rand::thread_rng;
-    use crate::Color::{Black, White};
 
     fn assert_msg_eq(msg: Messages) {
         let decoded_msg =

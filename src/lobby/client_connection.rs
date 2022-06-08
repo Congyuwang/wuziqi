@@ -148,7 +148,11 @@ impl ClientConnection {
                                 }
                             }
                             Messages::UpdateAccount(name, old_password, new_password) => {
-                                match login_validator.update_user_info(&name, Password(old_password), Password(new_password.clone())) {
+                                match login_validator.update_user_info(
+                                    &name,
+                                    Password(old_password),
+                                    Password(new_password.clone()),
+                                ) {
                                     Ok(user_id) => {
                                         if inner
                                             .sender()
@@ -201,7 +205,10 @@ impl ClientConnection {
             .sender()
             .send(Responses::LoginSuccess(player_name.clone()))
             .await;
-        name_dict.lock().await.insert(player_name.clone(), inner.sender().clone());
+        name_dict
+            .lock()
+            .await
+            .insert(player_name.clone(), inner.sender().clone());
         Ok(ClientConnection {
             inner,
             player_name,

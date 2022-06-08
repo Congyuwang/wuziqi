@@ -6,6 +6,7 @@ mod room_manager;
 pub(crate) mod token;
 mod user_db;
 
+use crate::lobby::user_db::LoginValidator;
 use anyhow::Result;
 use async_std::net::TcpListener;
 use async_std::sync::Mutex;
@@ -19,9 +20,12 @@ use std::net::SocketAddrV4;
 use std::path::Path;
 use std::sync::Arc;
 pub use token::RoomToken;
-use crate::lobby::user_db::LoginValidator;
 
-pub async fn start_server(addrs: SocketAddrV4, server_config: Arc<ServerConfig>, db_path: &Path) -> Result<()> {
+pub async fn start_server(
+    addrs: SocketAddrV4,
+    server_config: Arc<ServerConfig>,
+    db_path: &Path,
+) -> Result<()> {
     let connection_stats = ConnectionStats::new();
     let user_name_set = Arc::new(Mutex::new(HashMap::new()));
     let room_manager = RoomManager::new();

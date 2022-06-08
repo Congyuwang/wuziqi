@@ -83,9 +83,7 @@ impl LoginValidator {
     pub fn query_user_password(&self, name: &str) -> Result<UserInfo, LoginFailure> {
         let name = match validate_name(name) {
             Ok(name) => name,
-            Err(e) => {
-                return Err(LoginFailure::BadInput(e))
-            }
+            Err(e) => return Err(LoginFailure::BadInput(e)),
         };
         match self.user_info.get(name.as_bytes()) {
             Ok(Some(data)) => match decode_from_slice(data.as_ref(), DB_BIN_CONFIG) {
@@ -110,7 +108,8 @@ impl LoginValidator {
         password: Password,
     ) -> Result<u64, CreateAccountFailure> {
         let name = validate_name(name).map_err(|e| CreateAccountFailure::BadInput(e))?;
-        let password = validate_password(password).map_err(|e| CreateAccountFailure::BadInput(e))?;
+        let password =
+            validate_password(password).map_err(|e| CreateAccountFailure::BadInput(e))?;
 
         // generate a new user_id by incrementing a counter
         let new_id = self.current_id.load(Ordering::SeqCst) + 1;
@@ -166,12 +165,11 @@ impl LoginValidator {
         old_password: Password,
         new_password: Password,
     ) -> Result<u64, UpdatePasswordFailure> {
-        let name = validate_name(name)
-            .map_err(|e| UpdatePasswordFailure::BadInput(e))?;
-        let old_password = validate_password(old_password)
-            .map_err(|e| UpdatePasswordFailure::BadInput(e))?;
-        let new_password = validate_password(new_password)
-            .map_err(|e| UpdatePasswordFailure::BadInput(e))?;
+        let name = validate_name(name).map_err(|e| UpdatePasswordFailure::BadInput(e))?;
+        let old_password =
+            validate_password(old_password).map_err(|e| UpdatePasswordFailure::BadInput(e))?;
+        let new_password =
+            validate_password(new_password).map_err(|e| UpdatePasswordFailure::BadInput(e))?;
 
         let old_info: UserInfo = match self.user_info.get(name) {
             Ok(info) => match info {
