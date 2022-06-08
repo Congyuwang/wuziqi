@@ -203,7 +203,7 @@ fn print_help() {
 
 fn rsp_to_string(rsp: Responses) -> String {
     match rsp {
-        Responses::ConnectionSuccess => "connection success".to_string(),
+        Responses::LoginSuccess => "connection success".to_string(),
         Responses::ConnectionInitFailure(e) => {
             format!("connection init failure: {:?}", e)
         }

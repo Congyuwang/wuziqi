@@ -7,8 +7,8 @@ mod session;
 
 pub use game_field::{compress_field, decompress_field, Color, State};
 pub use session::{
-    new_session, Commands, FieldState, FieldStateNullable, GameQuitResponse, GameResult,
-    PlayerQuitReason, PlayerResponse, SessionConfig, UndoResponse,
+    new_session, Commands, FieldInner, FieldState, FieldStateNullable, GameQuitResponse,
+    GameResult, PlayerQuitReason, PlayerResponse, SessionConfig, UndoResponse,
 };
 
 #[cfg(test)]

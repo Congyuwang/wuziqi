@@ -1,8 +1,10 @@
 use async_std::io::BufReader;
-use async_std::net::TcpStream;
-use futures::AsyncReadExt;
+use futures::{AsyncRead, AsyncReadExt};
 
-pub async fn read_n_bytes(reader: &mut BufReader<TcpStream>, n: u32) -> Option<Vec<u8>> {
+pub async fn read_n_bytes<S>(reader: &mut BufReader<S>, n: u32) -> Option<Vec<u8>>
+where
+    S: AsyncRead + Unpin,
+{
     let n = n as usize;
     let mut pay_load = Vec::with_capacity(n);
     for _ in 0..n {
@@ -11,7 +13,10 @@ pub async fn read_n_bytes(reader: &mut BufReader<TcpStream>, n: u32) -> Option<V
     Some(pay_load)
 }
 
-pub async fn read_be_u32(reader: &mut BufReader<TcpStream>) -> Option<u32> {
+pub async fn read_be_u32<S>(reader: &mut BufReader<S>) -> Option<u32>
+where
+    S: AsyncRead + Unpin,
+{
     let mut bytes = [0u8; 4];
     if reader.read_exact(&mut bytes).await.is_err() {
         None
@@ -20,7 +25,10 @@ pub async fn read_be_u32(reader: &mut BufReader<TcpStream>) -> Option<u32> {
     }
 }
 
-pub async fn read_one_byte(reader: &mut BufReader<TcpStream>) -> Option<u8> {
+pub async fn read_one_byte<S>(reader: &mut BufReader<S>) -> Option<u8>
+where
+    S: AsyncRead + Unpin,
+{
     let mut packet_type = [0u8; 1];
     if reader.read_exact(&mut packet_type).await.is_err() {
         None

@@ -2,10 +2,10 @@ mod api;
 mod compression;
 mod field;
 mod utility;
-use serde::{Deserialize, Serialize};
+use bincode::{Decode, Encode};
 
 /// Represents player action (black or white)
-#[derive(Clone, PartialEq, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Copy, Debug, Encode, Decode)]
 #[repr(u8)]
 pub enum Color {
     Black = 1,
@@ -13,7 +13,7 @@ pub enum Color {
 }
 
 /// represents field State: Black, White, Empty
-#[derive(Clone, PartialEq, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Copy, Debug, Encode, Decode)]
 #[repr(u8)]
 pub enum State {
     // black

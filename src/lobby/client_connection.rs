@@ -1,4 +1,5 @@
 use crate::lobby::messages::{Messages, Responses};
+use crate::lobby::user_db::{LoginValidator, Password};
 use crate::network::connection::{Conn, ConnectionError, Received};
 use async_std::channel::Sender;
 use async_std::net::TcpStream;
@@ -13,6 +14,7 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -21,7 +23,6 @@ use std::time::Duration;
 const PING_INTERVAL: Duration = Duration::from_secs(5);
 const MAX_DATA_SIZE: u32 = 1024 * 1024 * 20;
 const SINGLE_IP_MAX_CONN: u32 = 64;
-const MAX_USER_NAME_BYTES: usize = 32;
 const MAX_PLAYER_SEARCH_RESULT_COUNT: usize = 20;
 
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
@@ -58,9 +59,10 @@ impl ClientConnection {
         socket_address: SocketAddr,
         connection_stats: Arc<Mutex<ConnectionStats>>,
         name_dict: Arc<Mutex<HashMap<String, Sender<Responses>>>>,
+        login_validator: LoginValidator,
     ) -> Result<Self, (ConnectionInitError, Option<Conn<Responses, Messages>>)> {
         // add connection, check if ip max connection number exceeded
-        let player_id = match connection_stats
+        match connection_stats
             .lock()
             .await
             .add_conn(socket_address.clone(), SINGLE_IP_MAX_CONN)
@@ -78,48 +80,108 @@ impl ClientConnection {
         };
         let tls = TlsStream::Server(match acceptor.accept(tcp).await {
             Ok(tls) => tls,
-            Err(e) => return Err((ConnectionInitError::TlsError, None)),
+            Err(_) => return Err((ConnectionInitError::TlsError, None)),
         });
         let mut inner = Conn::init(tls, Some(PING_INTERVAL), MAX_DATA_SIZE);
-        let player_name = loop {
+        let (player_name, player_id) = loop {
             match inner.next().await {
                 None => return Err((ConnectionInitError::ConnectionClosed, Some(inner))),
                 Some(msg) => {
                     match msg {
                         Received::Response(msg) => match msg {
                             Messages::Login(name, password) => {
-                                if name.len() > MAX_USER_NAME_BYTES {
-                                    return Err((
-                                        ConnectionInitError::UserNameTooLong,
-                                        Some(inner),
-                                    ));
-                                } else {
-                                    if name.is_empty() | name.contains("\n") {
-                                        return Err((
-                                            ConnectionInitError::InvalidUserName,
-                                            Some(inner),
-                                        ));
-                                    } else {
-                                        let mut name_dict = name_dict.lock().await;
-                                        match name_dict.entry(name) {
-                                            Entry::Occupied(_) => {
-                                                return Err((
-                                                    ConnectionInitError::UserNameExists,
-                                                    Some(inner),
-                                                ));
-                                            }
-                                            Entry::Vacant(v) => {
-                                                let my_name = v.key().clone();
-                                                v.insert(inner.sender().clone());
-                                                break my_name;
-                                            }
+                                match login_validator.query_user_password(&name) {
+                                    Err(e) => {
+                                        if inner
+                                            .sender()
+                                            .send(Responses::LoginFailure(e))
+                                            .await
+                                            .is_err()
+                                        {
+                                            return Err((
+                                                ConnectionInitError::ConnectionClosed,
+                                                Some(inner),
+                                            ));
+                                        }
+                                    }
+                                    Ok(info) => {
+                                        if info.password.deref().eq(&password) {
+                                            break (name, info.user_id);
                                         }
                                     }
                                 }
                             }
-                            _ => {
-                                return Err((ConnectionInitError::UserNameNotReceived, Some(inner)))
+                            Messages::CreateAccount(name, password) => {
+                                match login_validator
+                                    .register_user(&name, Password(password.clone()))
+                                {
+                                    Ok(user_id) => {
+                                        if inner
+                                            .sender()
+                                            .send(Responses::CreateAccountSuccess(
+                                                name.clone(),
+                                                password,
+                                            ))
+                                            .await
+                                            .is_err()
+                                        {
+                                            return Err((
+                                                ConnectionInitError::ConnectionClosed,
+                                                Some(inner),
+                                            ));
+                                        }
+                                        break (name, user_id);
+                                    }
+                                    Err(e) => {
+                                        if inner
+                                            .sender()
+                                            .send(Responses::CreateAccountFailure(e))
+                                            .await
+                                            .is_err()
+                                        {
+                                            return Err((
+                                                ConnectionInitError::ConnectionClosed,
+                                                Some(inner),
+                                            ));
+                                        }
+                                    }
+                                }
                             }
+                            Messages::UpdateAccount(name, old_password, new_password) => {
+                                match login_validator.update_user_info(&name, Password(old_password), Password(new_password.clone())) {
+                                    Ok(user_id) => {
+                                        if inner
+                                            .sender()
+                                            .send(Responses::UpdateAccountSuccess(
+                                                name.clone(),
+                                                new_password,
+                                            ))
+                                            .await
+                                            .is_err()
+                                        {
+                                            return Err((
+                                                ConnectionInitError::ConnectionClosed,
+                                                Some(inner),
+                                            ));
+                                        }
+                                        break (name, user_id);
+                                    }
+                                    Err(e) => {
+                                        if inner
+                                            .sender()
+                                            .send(Responses::UpdateAccountFailure(e))
+                                            .await
+                                            .is_err()
+                                        {
+                                            return Err((
+                                                ConnectionInitError::ConnectionClosed,
+                                                Some(inner),
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
                         },
                         Received::Ping => {
                             // jump over Ping
@@ -134,7 +196,7 @@ impl ClientConnection {
                 }
             }
         };
-        info!("player {player_id}: {player_name} connected to server from {socket_address}");
+        info!("player {player_id}: {player_name} enters room");
         let _ = inner
             .sender()
             .send(Responses::LoginSuccess(player_name.clone()))
@@ -242,7 +304,6 @@ impl Drop for ClientConnection {
 pub struct ConnectionStats {
     conn_count_v4: HashMap<Ipv4Addr, u32>,
     conn_count_v6: HashMap<Ipv6Addr, u32>,
-    current_uid: u64,
 }
 
 impl ConnectionStats {
@@ -250,7 +311,6 @@ impl ConnectionStats {
         Arc::new(Mutex::new(Self {
             conn_count_v4: Default::default(),
             conn_count_v6: Default::default(),
-            current_uid: 0,
         }))
     }
 
@@ -259,20 +319,14 @@ impl ConnectionStats {
         &mut self,
         socket_address: SocketAddr,
         single_ip_max_conn: u32,
-    ) -> Result<u64, ConnectionInitError> {
+    ) -> Result<(), ConnectionInitError> {
         match socket_address {
-            SocketAddr::V4(v4) => Self::add_ip(
-                &mut self.current_uid,
-                &mut self.conn_count_v4,
-                v4.ip().clone(),
-                single_ip_max_conn,
-            ),
-            SocketAddr::V6(v6) => Self::add_ip(
-                &mut self.current_uid,
-                &mut self.conn_count_v6,
-                v6.ip().clone(),
-                single_ip_max_conn,
-            ),
+            SocketAddr::V4(v4) => {
+                Self::add_ip(&mut self.conn_count_v4, v4.ip().clone(), single_ip_max_conn)
+            }
+            SocketAddr::V6(v6) => {
+                Self::add_ip(&mut self.conn_count_v6, v6.ip().clone(), single_ip_max_conn)
+            }
         }
     }
 
@@ -285,11 +339,10 @@ impl ConnectionStats {
     }
 
     fn add_ip<T: Eq + Hash>(
-        current_uid: &mut u64,
         count_table: &mut HashMap<T, u32>,
         ip: T,
         single_ip_max_conn: u32,
-    ) -> Result<u64, ConnectionInitError> {
+    ) -> Result<(), ConnectionInitError> {
         match count_table.entry(ip) {
             Entry::Occupied(mut o) => {
                 let count = o.get_mut();
@@ -297,14 +350,12 @@ impl ConnectionStats {
                     Err(ConnectionInitError::IpMaxConnExceed)
                 } else {
                     *count += 1;
-                    *current_uid = current_uid.wrapping_add(1);
-                    Ok(*current_uid)
+                    Ok(())
                 }
             }
             Entry::Vacant(v) => {
                 v.insert(1);
-                *current_uid = current_uid.wrapping_add(1);
-                Ok(*current_uid)
+                Ok(())
             }
         }
     }

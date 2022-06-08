@@ -1,7 +1,7 @@
 use crate::game::game_field::field::{Field, GameState};
 use crate::game::game_field::Color;
 use crate::game::session::{FieldState, FieldStateNullable};
-use crate::CHANNEL_SIZE;
+use crate::{FieldInner, CHANNEL_SIZE};
 use anyhow::{Error, Result};
 use async_std::channel::{bounded, Receiver, Sender};
 use async_std::task;
@@ -127,7 +127,7 @@ async fn send_game_state(
     response
         .send(GameResponse::Field(FieldState {
             latest: (x, y, color),
-            field: *field.get_field(),
+            field: FieldInner(*field.get_field()),
         }))
         .await?;
     // send field state
@@ -154,7 +154,7 @@ async fn send_undo_state(
     Ok(response
         .send(GameResponse::Undo(FieldStateNullable {
             latest: prev,
-            field: *field.get_field(),
+            field: FieldInner(*field.get_field()),
         }))
         .await?)
 }

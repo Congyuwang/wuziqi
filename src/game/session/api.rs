@@ -3,8 +3,15 @@ use crate::game::session::messages::{
     PlayerAction::{self, Play, Quit, RequestUndo, Undo},
     UndoAction::{Approve, Reject},
 };
+use crate::{compress_field, decompress_field};
 use async_std::channel::{Receiver, Sender};
-use serde::{Deserialize, Serialize};
+use bincode::de::read::Reader;
+use bincode::de::Decoder;
+use bincode::enc::write::Writer;
+use bincode::enc::Encoder;
+use bincode::error::{DecodeError, EncodeError};
+use bincode::{Decode, Encode};
+use std::ops::Deref;
 
 /// Public API used for interacting with the game
 pub struct Commands {
@@ -120,24 +127,63 @@ pub enum GameResult {
 
 /// this struct represents a game field
 /// and also the coordinate of the latest position
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Encode, Decode)]
 pub struct FieldState {
     pub latest: (u8, u8, Color),
-    pub field: [[State; 15]; 15],
+    pub field: FieldInner,
 }
 
 /// this struct represents a game field
 /// and also the coordinate of the latest position
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Encode, Decode)]
 pub struct FieldStateNullable {
     pub latest: Option<(u8, u8, Color)>,
-    pub field: [[State; 15]; 15],
+    pub field: FieldInner,
+}
+
+#[derive(Clone, PartialEq)]
+pub struct FieldInner(pub [[State; 15]; 15]);
+
+impl Deref for FieldInner {
+    type Target = [[State; 15]; 15];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Decode for FieldInner {
+    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+        decoder.claim_bytes_read(4 * 15)?;
+        let reader = decoder.reader();
+        let mut arr = [0u8, 0u8, 0u8, 0u8];
+        let mut field_data = [(0u8, 0u8, 0u8, 0u8); 15];
+        for row in field_data.iter_mut() {
+            reader.read(&mut arr)?;
+            row.0 = arr[0];
+            row.1 = arr[1];
+            row.2 = arr[2];
+            row.3 = arr[3];
+        }
+        Ok(FieldInner(decompress_field(&field_data)))
+    }
+}
+
+impl Encode for FieldInner {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+        let writer = encoder.writer();
+        let bytes_array = compress_field(self);
+        for bytes in bytes_array {
+            writer.write(&[bytes.0, bytes.1, bytes.2, bytes.3])?;
+        }
+        Ok(())
+    }
 }
 
 /// client time should be shorter
 ///
 /// 0 means no timeout
-#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Debug, Encode, Decode)]
 pub struct SessionConfig {
     pub undo_request_timeout: u64,
     pub undo_dialogue_extra_seconds: u64,

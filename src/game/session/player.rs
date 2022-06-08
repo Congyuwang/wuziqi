@@ -218,7 +218,7 @@ async fn on_field_update(
         player_state.now_my_turn();
         player_state.allow_undo = false;
     }
-    player_state.update_field(field_state.field.clone());
+    player_state.update_field(field_state.field.0.clone());
     // forward field state
     responses
         .send(Response::Player(PlayerResponse::FieldUpdate(field_state)))
@@ -258,7 +258,7 @@ async fn on_undo_response(
     // close undo dialogue once received undo responses from game session
     match &undo_rsp {
         UndoResponse::Undo(f) => {
-            player_state.update_field(f.field.clone());
+            player_state.update_field(f.field.0.clone());
             match &f.latest {
                 // if undid the first step
                 None => {
