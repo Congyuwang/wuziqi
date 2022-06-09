@@ -242,7 +242,7 @@ async fn on_player_quit(
             let rsp = GameQuitResponse::PlayerQuitSession(player_id);
             broadcast_to_players(SessionPlayerResponse::Quit(rsp), responses).await?;
             return Ok(());
-        },
+        }
         PlayerQuitReason::Disconnected => GameQuitResponse::OpponentDisconnected(player_id),
         PlayerQuitReason::Error(e) => GameQuitResponse::OpponentError(player_id, e),
         PlayerQuitReason::ExitGame => GameQuitResponse::OpponentExitGame(player_id),

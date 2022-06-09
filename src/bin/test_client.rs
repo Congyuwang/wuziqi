@@ -7,7 +7,7 @@ use async_std::task::{block_on, JoinHandle};
 use futures::{join, AsyncBufReadExt, StreamExt};
 use futures_rustls;
 use futures_rustls::{TlsConnector, TlsStream};
-use log::{error, info, LevelFilter, warn};
+use log::{error, info, warn, LevelFilter};
 use rustls::{ClientConfig, OwnedTrustAnchor, RootCertStore};
 use rustls_pemfile::certs;
 use std::env;

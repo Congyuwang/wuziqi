@@ -47,8 +47,22 @@ pub(crate) async fn start_game_session(
         .sender()
         .send(Responses::GameStarted(White))
         .await;
-    let b_exit = connect_player_game(black_player_id, black_player, black_cmd, b_chat_r, &w_chat_s, Black);
-    let w_exit = connect_player_game(white_player_id, white_player, white_cmd, w_chat_r, &b_chat_s, White);
+    let b_exit = connect_player_game(
+        black_player_id,
+        black_player,
+        black_cmd,
+        b_chat_r,
+        &w_chat_s,
+        Black,
+    );
+    let w_exit = connect_player_game(
+        white_player_id,
+        white_player,
+        white_cmd,
+        w_chat_r,
+        &b_chat_s,
+        White,
+    );
     (b_exit.await, w_exit.await)
 }
 
@@ -212,7 +226,8 @@ async fn handle_session_response(
                             if id == my_id {
                                 let _ = player_sender.send(Responses::QuitGameSessionSuccess).await;
                             } else {
-                                let _ = player_sender.send(Responses::OpponentQuitGameSession).await;
+                                let _ =
+                                    player_sender.send(Responses::OpponentQuitGameSession).await;
                             }
                             // enter lobby on opponent quit
                             NextStep::EnterLobby(PlayerResult::OpponentQuit)

@@ -109,7 +109,9 @@ impl ClientConnection {
                                             if name_dict.lock().await.contains_key(&name) {
                                                 if inner
                                                     .sender()
-                                                    .send(Responses::LoginFailure(LoginFailure::AlreadyLoggedIn))
+                                                    .send(Responses::LoginFailure(
+                                                        LoginFailure::AlreadyLoggedIn,
+                                                    ))
                                                     .await
                                                     .is_err()
                                                 {
@@ -124,7 +126,9 @@ impl ClientConnection {
                                         } else {
                                             if inner
                                                 .sender()
-                                                .send(Responses::LoginFailure(LoginFailure::PasswordIncorrect))
+                                                .send(Responses::LoginFailure(
+                                                    LoginFailure::PasswordIncorrect,
+                                                ))
                                                 .await
                                                 .is_err()
                                             {
@@ -197,7 +201,9 @@ impl ClientConnection {
                                         if name_dict.lock().await.contains_key(&name) {
                                             if inner
                                                 .sender()
-                                                .send(Responses::CreateAccountFailure(CreateAccountFailure::AlreadyLoggedIn))
+                                                .send(Responses::CreateAccountFailure(
+                                                    CreateAccountFailure::AlreadyLoggedIn,
+                                                ))
                                                 .await
                                                 .is_err()
                                             {
