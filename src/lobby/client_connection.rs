@@ -23,7 +23,7 @@ use std::time::Duration;
 const PING_INTERVAL: Duration = Duration::from_secs(5);
 const MAX_DATA_SIZE: u32 = 1024 * 1024 * 20;
 const SINGLE_IP_MAX_CONN: u32 = 64;
-const MAX_PLAYER_SEARCH_RESULT_COUNT: usize = 20;
+const MAX_PLAYER_SEARCH_RESULT_COUNT: usize = u8::MAX as usize;
 
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum ConnectionInitError {

@@ -41,7 +41,7 @@ pub enum Messages {
     /// quit game session (only quit this round).
     QuitGameSession,
     /// search online player names (name, limit)
-    /// currently, at most 20 names will be returned
+    /// currently, at most u8::MAX names will be returned
     SearchOnlinePlayers(Option<String>, u8),
     /// chat message
     ChatMessage(String),
