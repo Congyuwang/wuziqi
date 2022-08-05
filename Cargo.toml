@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 futures = "0.3.19"
 async-std = "1.10.0"
-futures-rustls = "0.22.1"
+tokio-rustls = { git = "https://github.com/Congyuwang/tls", features=["use-futures"] }
 rustls-pemfile = "1.0.0"
 rustls = "0.20.6"
 webpki-roots = "0.22.3"

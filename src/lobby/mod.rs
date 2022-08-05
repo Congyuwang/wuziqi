@@ -11,7 +11,7 @@ use anyhow::Result;
 use async_std::net::TcpListener;
 use async_std::sync::Mutex;
 pub use client_connection::{ClientConnection, ConnectionInitError, ConnectionStats};
-use futures_rustls::TlsAcceptor;
+use tokio_rustls::TlsAcceptor;
 pub use messages::{
     CreateAccountFailure, InvalidAccountPassword, LoginFailure, Messages, Responses, RoomState,
     UpdatePasswordFailure,

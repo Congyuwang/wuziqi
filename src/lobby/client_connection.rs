@@ -8,7 +8,7 @@ use async_std::sync::Mutex;
 use async_std::task::block_on;
 use bincode::{Decode, Encode};
 use futures::StreamExt;
-use futures_rustls::{TlsAcceptor, TlsStream};
+use tokio_rustls::{TlsAcceptor, TlsStream};
 use log::{error, info};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
